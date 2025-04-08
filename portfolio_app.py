@@ -75,8 +75,8 @@ if uploaded_files:
         period = period_map[selected_period]
         benchmark_data = {}
         benchmark_series = []
-        portfolio_series = []
         portfolio_change = None
+        portfolio_normalized = None
 
         for label, symbol in comparison_tickers.items():
             try:
@@ -99,7 +99,6 @@ if uploaded_files:
         data = []
         portfolio_start_value = 0
         portfolio_end_value = 0
-        portfolio_normalized = None
 
         for ticker in tickers:
             try:
@@ -126,18 +125,17 @@ if uploaded_files:
                 if not hist.empty:
                     norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
                     if portfolio_normalized is None:
-                    portfolio_normalized = norm_price * quantity
-                else:
-                    portfolio_normalized += norm_price * quantity
+                        portfolio_normalized = norm_price * quantity
+                    else:
+                        portfolio_normalized += norm_price * quantity
 
                 data.append({"Ticker": ticker, "Current Price": end_price, "Sector": sector})
             except Exception:
                 data.append({"Ticker": ticker, "Current Price": None, "Sector": "Unknown"})
 
-        if portfolio_start_value > 0:
+        if portfolio_start_value > 0 and portfolio_normalized is not None:
             portfolio_change = (portfolio_end_value / portfolio_start_value - 1) * 100
-            if portfolio_series:
-                portfolio_normalized = pd.DataFrame({
+            portfolio_normalized = pd.DataFrame({
                 "Date": hist.index,
                 "Normalized Price": portfolio_normalized / portfolio_start_value * 100,
                 "Index": "My Portfolio"
@@ -152,7 +150,6 @@ if uploaded_files:
             selected_accounts = st.sidebar.multiselect("Filter by account(s):", accounts, default=accounts)
             df = df[df["Account"].isin(selected_accounts)]
 
-        # Styled performance grid 2x2 with color
         st.subheader("🔁 Performance Summary")
         metric_cols = st.columns(2)
         perf_metrics = [
@@ -167,13 +164,11 @@ if uploaded_files:
             with metric_cols[i % 2]:
                 st.markdown(f"<div style='font-size: 14px; color: {color};'>{label}: {formatted_value}</div>", unsafe_allow_html=True)
 
-        # Normalized benchmark chart with portfolio
         if benchmark_series:
             all_series = pd.concat(benchmark_series + ([portfolio_normalized] if portfolio_normalized is not None else []))
             fig = px.line(all_series, x="Date", y="Normalized Price", color="Index", title="Normalized Performance Comparison")
             st.plotly_chart(fig, use_container_width=True)
 
-        # Portfolio overview
         st.subheader("📊 Portfolio Overview")
         st.dataframe(df)
         total_value = df["Market Value"].sum()
