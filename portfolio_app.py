@@ -125,7 +125,10 @@ if uploaded_files:
 
                 if not hist.empty:
                     norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
-                    portfolio_series.append(norm_price * quantity)
+                    if portfolio_normalized is None:
+                    portfolio_normalized = norm_price * quantity
+                else:
+                    portfolio_normalized += norm_price * quantity
 
                 data.append({"Ticker": ticker, "Current Price": end_price, "Sector": sector})
             except Exception:
@@ -135,10 +138,10 @@ if uploaded_files:
             portfolio_change = (portfolio_end_value / portfolio_start_value - 1) * 100
             if portfolio_series:
                 portfolio_normalized = pd.DataFrame({
-                    "Date": hist.index,
-                    "Normalized Price": pd.concat(portfolio_series, axis=1).sum(axis=1) / portfolio_start_value * 100,
-                    "Index": "My Portfolio"
-                })
+                "Date": hist.index,
+                "Normalized Price": portfolio_normalized / portfolio_start_value * 100,
+                "Index": "My Portfolio"
+            })
 
         price_df = pd.DataFrame(data)
         df = df.merge(price_df, on="Ticker", how="left")
