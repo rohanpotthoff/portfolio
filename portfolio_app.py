@@ -338,7 +338,7 @@ def main():
             # ==============================================
             # Performance Visualization
             # ==============================================
-            st.subheader("📉 Intraday Performance Comparison" if period == "1d" else "📊 Historical Performance")if benchmark_series:
+            st.subheader("📉 Intraday Performance Comparison" if period == "1d" else "📊 Historical Performance")
             if benchmark_series:
                  try:
                         # Remove duplicate indices and sort
