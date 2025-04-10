@@ -350,16 +350,19 @@ if uploaded_files:
     for i, (label, value) in enumerate(metrics):
         with cols[i]:
             if value is not None:
-                delta_arrow = "↑" if value >= 0 else "↓"
-                delta_color = "normal"
-                if value == 0: 
-                    delta_arrow = "-"
-                    delta_color = "off"
+                delta_arrow = "↑" if value >= 0 else "↓" if value < 0 else ""
+                color = "#2ECC40" if value > 0 else "#FF4136" if value < 0 else "#AAAAAA"
+                display_value = f"""
+                <div style="display: flex; align-items: center; gap: 4px;">
+                    <span>{abs(value):.2f}%</span>
+                    <span style="color: {color}; font-size: 1.1em;">{delta_arrow}</span>
+                </div>
+                """
+                st.markdown(display_value, unsafe_allow_html=True)
                 st.metric(
-                    label,
-                    f"{value:.2f}%",
-                    delta=delta_arrow,
-                    delta_color=delta_color,
+                    label=label,
+                    value="",  # Empty value since we're using custom display
+                    delta=None,  # Remove delta parameter
                     help=f"{label} {selected_period} performance"
                 )
             else:
