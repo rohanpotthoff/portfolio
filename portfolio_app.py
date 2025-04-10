@@ -396,33 +396,43 @@ if uploaded_files:
 
     st.markdown("---")  # Keep this divider here
 
+# ────────────────────────────────────────────────────────────────────────────────
+# STRATEGIC PERFORMANCE VISUALIZATION
+# Purpose: Align financial metrics with organizational objectives through 
+#          temporal analysis of portfolio performance
+# Key Features:
+#   - Real-time intraday tracking for tactical decision making
+#   - Benchmark correlation analysis for strategic positioning
+#   - Resource allocation visualization for operational optimization
+# ────────────────────────────────────────────────────────────────────────────────
 if benchmark_series:
+    # USER-CENTRIC DATA SELECTION INTERFACE
     selected_tickers = st.multiselect(
         "Add holdings to chart:", 
         options=df['Ticker'].unique(),
         default=[],
-        help="Compare individual holdings against benchmarks"
+        help="Strategic comparison of assets against market indicators"
     )
     
-    # Add selected holdings to chart
+    # OPERATIONAL EXECUTION FRAMEWORK
     for ticker in selected_tickers:
         try:
             if is_money_market(ticker):
-                # Create dummy data matching the benchmark timeframe
-                base_dates = benchmark_series[0]['Date']
-                hist = pd.DataFrame({'Close': [1.0]*len(base_dates)}, index=base_dates)
+                # LIQUIDITY POSITION MODELING
+                hist = pd.DataFrame({'Close': [1.0]*len(benchmark_series[0])}, 
+                                   index=benchmark_series[0]['Date'])
             else:
+                # MARKET DATA ACQUISITION PIPELINE
                 stock = yf.Ticker(ticker)
-                
-                if period == "1d":
-                    # Get intraday data with 5m intervals
-                    hist = stock.history(period="1d", interval="5m")
-                else:
-                    hist = stock.history(period=period)
+                hist = stock.history(
+                    period="1d", 
+                    interval="5m" if period == "1d" else None,
+                    prepost=False  # Focus on core trading hours
+                ) if period == "1d" else stock.history(period=period)
             
             if not hist.empty:
-                # Align dates with benchmark data
-                start_date = hist.index.min()
+                # TEMPORAL ALIGNMENT PROCESSING
+                hist = hist.between_time('09:30', '16:00') if period == "1d" else hist
                 norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
                 
                 benchmark_series.append(pd.DataFrame({
@@ -431,68 +441,68 @@ if benchmark_series:
                     "Index": ticker
                 }))
         except Exception as e:
-            st.warning(f"Error processing {ticker}: {str(e)}")
+            # RISK MANAGEMENT PROTOCOL
+            st.warning(f"Asset analysis limitation: {ticker} data unavailable")
+            continue
 
+    # STRATEGIC VISUALIZATION ENGINE
     try:
-        # Find common start date for all series
-        min_date = min(series['Date'].min() for series in benchmark_series)
-        max_date = max(series['Date'].max() for series in benchmark_series)
-        
-        # Filter and normalize all series
-        aligned_series = []
-        for series in benchmark_series:
-            filtered = series[series['Date'] >= min_date]
-            if period == "1d":
-                # Convert to time-only format for intraday
-                filtered['Date'] = filtered['Date'].dt.time
-            aligned_series.append(filtered)
-        
-        all_series = pd.concat(aligned_series)
-        
-        if portfolio_normalized is not None:
-            portfolio_filtered = portfolio_normalized[portfolio_normalized['Date'] >= min_date]
-            if period == "1d":
-                portfolio_filtered['Date'] = portfolio_filtered['Date'].dt.time
-            all_series = pd.concat([all_series, portfolio_filtered])
+        # TEMPORAL NORMALIZATION FRAMEWORK
+        if period == "1d":
+            # INTRADAY OPERATIONS CALIBRATION
+            market_hours = pd.date_range(
+                start=pd.Timestamp.today().normalize() + pd.Timedelta(hours=9, minutes=30),
+                end=pd.Timestamp.today().normalize() + pd.Timedelta(hours=16),
+                freq='5T'
+            )
+            
+            aligned_series = []
+            for series in benchmark_series:
+                aligned = series.set_index('Date').reindex(market_hours, method='ffill')
+                aligned_series.append(aligned.reset_index().rename(columns={'index':'Date'}))
+            
+            all_series = pd.concat(aligned_series)
+        else:
+            # LONG-TERM STRATEGIC ALIGNMENT
+            all_series = pd.concat([
+                s[s['Date'] >= min(s['Date'] for s in benchmark_series)] 
+                for s in benchmark_series
+            ])
 
+        # EXECUTIVE DECISION SUPPORT VISUALIZATION
         fig = px.line(
             all_series, 
             x="Date", 
             y="Normalized Price", 
             color="Index",
-            title=f"Performance Comparison ({selected_period})",
+            title=f"Strategic Performance Alignment: {selected_period}",
             template="plotly_white",
             height=500
+        ).update_layout(
+            xaxis_title="Trading Hours" if period == "1d" else "Strategic Timeline",
+            hovermode="x unified",
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                title_text="Performance Entities"
+            )
         )
         
-        # Format x-axis based on period
+        # TEMPORAL FORMATTING GOVERNANCE
         if period == "1d":
             fig.update_xaxes(
-                type='category',  # Treat time as categorical for intraday
                 tickformat="%H:%M",
-                title="Market Hours"
-            )
-        else:
-            fig.update_xaxes(
-                title="Date"
+                tickvals=pd.date_range(start=market_hours[0], end=market_hours[-1], freq='1H'),
+                range=[market_hours[0], market_hours[-1]]
             )
             
-        fig.update_layout(
-            title={
-                'text': f"Performance Comparison ({selected_period})",
-                'y':0.95,
-                'x':0.5,
-                'xanchor': 'center',
-                'yanchor': 'top',
-                'font': dict(size=20)
-            },
-            hovermode="x unified",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02)
-        )
         st.plotly_chart(fig, use_container_width=True)
         
     except Exception as e:
-        st.error(f"Error generating chart: {str(e)}")
+        # BUSINESS CONTINUITY PROTECTION
+        st.error(f"Strategic visualization system error: {str(e)}")
+        st.stop()
     
     # Portfolio Overview
     st.subheader("📊 Portfolio Composition")
