@@ -3,7 +3,8 @@ import pandas as pd
 import yfinance as yf
 import plotly.express as px
 import datetime
-import os
+import pytz
+from functools import lru_cache
 
 # ==============================================
 # Configuration
@@ -20,7 +21,7 @@ COMPARISON_TICKERS = {
 }
 PERIOD_MAP = {
     "Today": "1d",
-    "1W": "7d",
+    "1W": "1wk",
     "1M": "1mo",
     "3M": "3mo",
     "6M": "6mo",
@@ -28,10 +29,79 @@ PERIOD_MAP = {
     "1Y": "1y",
     "5Y": "5y"
 }
+MARKET_TIMEZONE = pytz.timezone("America/New_York")
 
 # ==============================================
 # Helper Functions
 # ==============================================
+def get_market_times():
+    """Get proper market open/close times based on current time"""
+    now = datetime.datetime.now(MARKET_TIMEZONE)
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    
+    # Handle after hours
+    if now > market_close:
+        market_open = market_open - datetime.timedelta(days=1)
+        market_close = market_close - datetime.timedelta(days=1)
+    elif now < market_open:
+        market_open = market_open - datetime.timedelta(days=1)
+        market_close = market_close - datetime.timedelta(days=1)
+        
+    return market_open, market_close
+
+@lru_cache(maxsize=128)
+def fetch_market_data(label, symbol, period):
+    """Fetch market data with proper intraday handling"""
+    try:
+        if period == "1d":
+            market_open, market_close = get_market_times()
+            ticker = yf.Ticker(symbol)
+            
+            # Handle European indices
+            if "^STOXX50E" in symbol:
+                hist = ticker.history(
+                    start=market_open - datetime.timedelta(hours=6),
+                    end=market_close - datetime.timedelta(hours=6),
+                    interval="5m",
+                    prepost=False
+                )
+                hist.index = hist.index.tz_convert("Europe/Berlin").tz_localize(None)
+            else:
+                hist = ticker.history(
+                    start=market_open,
+                    end=market_close,
+                    interval="5m",
+                    prepost=False
+                )
+                hist.index = hist.index.tz_localize(None)
+                
+            hist = hist[~hist.index.duplicated(keep='last')]
+            
+        else:
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period=period)
+            if hist.index.tz is not None:
+                hist.index = hist.index.tz_convert(None)
+            else:
+                hist.index = hist.index.tz_localize(None)
+        
+        if hist.empty or len(hist) < 2:
+            return None
+            
+        # Calculate percentage change from first data point
+        base_price = hist["Close"].iloc[0]
+        hist["Normalized"] = (hist["Close"] / base_price - 1) * 100
+        
+        return {
+            "data": hist[["Normalized"]].reset_index(),
+            "pct_change": (hist["Close"].iloc[-1] / hist["Close"].iloc[0] - 1) * 100,
+            "label": label
+        }
+    except Exception as e:
+        st.warning(f"Data error for {label}: {str(e)}")
+        return None
+
 def clean_portfolio(df):
     """Clean and standardize portfolio dataframe"""
     df.columns = [col.strip().capitalize() for col in df.columns]
@@ -44,42 +114,12 @@ def is_money_market(ticker):
     """Check if ticker is a money market fund"""
     return ticker in MONEY_MARKET_TICKERS or "XX" in ticker
 
-def fetch_market_data(label, symbol, period):
-    """Fetch market data with proper labeling"""
-    try:
-        ticker = yf.Ticker(symbol)
-        if period == "1d":
-            hist = ticker.history(period="1d", interval="5m", prepost=False)
-            hist = hist.between_time('09:30', '16:00').resample('5T').last()
-            hist = hist[~hist.index.duplicated(keep='last')]
-        else:
-            hist = ticker.history(period=period)
-        
-        # Handle timezone conversion safely
-        if hist.index.tz is not None:
-            hist.index = hist.index.tz_convert(None)
-        
-        if not hist.empty and len(hist) > 1:
-            norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
-            return {
-                "data": pd.DataFrame({
-                    "Date": hist.index,
-                    "Normalized Price": norm_price,
-                    "Index": label
-                }),
-                "pct_change": (hist["Close"].iloc[-1] / hist["Close"].iloc[0] - 1) * 100
-            }
-        return None
-    except Exception as e:
-        st.warning(f"Data fetch error for {label}: {str(e)}")
-        return None
-
 # ==============================================
 # UI Components
 # ==============================================
 def render_header():
     st.title("📊 Portfolio Tracker")
-    st.caption("Version 4.0 | Created by Rohan Potthoff")
+    st.caption("Version 4.1 | Created by Rohan Potthoff")
     st.markdown("""
     <style>
     .social-icons { display: flex; gap: 15px; margin-top: -10px; margin-bottom: 10px; }
@@ -96,8 +136,8 @@ def render_header():
 def render_sidebar():
     with st.sidebar.expander("📦 Version History", expanded=False):
         st.markdown("""
+        - **v4.1**: Fixed normalization, intraday handling, Euro Stoxx timing
         - **v4.0**: Enhanced metrics, treasury benchmark, raw data export
-        - **v3.0**: Portfolio insights, money market support
         """)
     
     with st.sidebar.expander("🔧 Filters & Settings", expanded=True):
@@ -117,18 +157,14 @@ def main():
     selected_period = render_sidebar()
     period = PERIOD_MAP[selected_period]
 
-    benchmark_series = []
-    benchmark_data = {}
-    portfolio_change = None
-    df = pd.DataFrame()
-    total_value = 0
-
     # Fetch benchmark data
+    benchmark_series = []
+    benchmark_values = {}
     for label, symbol in COMPARISON_TICKERS.items():
         result = fetch_market_data(label, symbol, period)
         if result:
-            benchmark_series.append(result["data"])
-            benchmark_data[label] = result["pct_change"]
+            benchmark_series.append(result)
+            benchmark_values[label] = result["pct_change"]
 
     # File upload handling
     uploaded_files = st.file_uploader(
@@ -168,41 +204,42 @@ def main():
             price_data = []
             portfolio_start_value = 0
             portfolio_end_value = 0
+            portfolio_history = pd.DataFrame()
 
             for ticker in df["Ticker"].unique():
                 try:
                     if is_money_market(ticker):
                         current_price = 1.0
                         start_price = 1.0
-                        end_price = 1.0
                         hist = None
                         sector = "Cash"
                         asset_class = "Money Market"
                     else:
                         stock = yf.Ticker(ticker)
-                        info = stock.info
+                        result = fetch_market_data(ticker, ticker, period)
                         
-                        if period == "1d":
-                            hist = stock.history(period="1d", interval="5m", prepost=False)
-                            hist = hist.between_time('09:30', '16:00').resample('5T').last()
-                            hist = hist[~hist.index.duplicated()]
-                            start_price = hist["Close"].iloc[0] if not hist.empty else 1.0
-                            end_price = hist["Close"].iloc[-1] if not hist.empty else 1.0
+                        if result:
+                            hist = result["data"]
+                            start_price = stock.history(period=period)["Close"].iloc[0]
+                            current_price = stock.history(period=period)["Close"].iloc[-1]
+                            sector = stock.info.get("sector", "Unknown")
+                            asset_class = stock.info.get("quoteType", "Stock").title()
+                            
+                            # Store for portfolio performance
+                            if portfolio_history.empty:
+                                portfolio_history = hist[["Date"]].copy()
+                            portfolio_history[ticker] = hist["Normalized"]
                         else:
-                            hist = stock.history(period=period)
-                            start_price = hist["Close"].iloc[0] if not hist.empty else 1.0
-                            end_price = hist["Close"].iloc[-1] if not hist.empty else 1.0
-                        
-                        sector = info.get("sector", "Unknown")
-                        asset_class = info.get("quoteType", "Stock").title()
+                            start_price = 1.0
+                            current_price = 1.0
 
                     qty = df[df["Ticker"] == ticker]["Quantity"].sum()
                     portfolio_start_value += qty * start_price
-                    portfolio_end_value += qty * end_price
+                    portfolio_end_value += qty * current_price
 
                     price_data.append({
                         "Ticker": ticker, 
-                        "Current Price": end_price,
+                        "Current Price": current_price,
                         "Sector": sector,
                         "Asset Class": asset_class
                     })
@@ -211,75 +248,146 @@ def main():
                     st.warning(f"Skipping {ticker}: {str(e)}")
                     continue
 
-            # Calculate performance
-            if portfolio_start_value > 0:
-                portfolio_change = (portfolio_end_value / portfolio_start_value - 1) * 100
+            # Calculate portfolio performance
+            if not portfolio_history.empty:
+                portfolio_history["Portfolio"] = portfolio_history.drop("Date", axis=1).mean(axis=1)
+                portfolio_data = {
+                    "data": portfolio_history[["Date", "Portfolio"]].rename(columns={"Portfolio": "Normalized"}),
+                    "pct_change": (portfolio_end_value / portfolio_start_value - 1) * 100,
+                    "label": "My Portfolio"
+                }
+            else:
+                portfolio_data = None
 
-            # Merge price data
-            price_df = pd.DataFrame(price_data)
-            df = df.merge(price_df, on="Ticker", how="left")
-            df["Market Value"] = df["Quantity"] * df["Current Price"]
-            total_value = df["Market Value"].sum()
+            # Create unified chart
+            all_data = benchmark_series.copy()
+            if portfolio_data:
+                all_data.append(portfolio_data)
 
-            # Add portfolio to benchmarks
-            if total_value > 0 and benchmark_series:
-                portfolio_normalized = pd.DataFrame({
-                    "Date": benchmark_series[0]["Date"],
-                    "Normalized Price": (portfolio_end_value / portfolio_start_value * 100),
-                    "Index": "My Portfolio"
-                })
-                benchmark_series.append(portfolio_normalized)
+            chart_data = []
+            for item in all_data:
+                df = item["data"].copy()
+                df["Index"] = item["label"]
+                chart_data.append(df)
+            
+            combined = pd.concat(chart_data).reset_index(drop=True)
+
+            # Performance Metrics
+            st.subheader("📈 Performance Metrics")
+            cols = st.columns(1 + len(COMPARISON_TICKERS))
+            
+            # Portfolio metric
+            with cols[0]:
+                if portfolio_data:
+                    delta_color = "normal" if portfolio_data["pct_change"] >= 0 else "inverse"
+                    st.metric(
+                        "My Portfolio",
+                        f"${portfolio_end_value:,.2f}",
+                        f"{portfolio_data['pct_change']:.2f}%",
+                        delta_color=delta_color
+                    )
+            
+            # Benchmark metrics
+            for i, (label, value) in enumerate(benchmark_values.items()):
+                with cols[i+1]:
+                    st.metric(
+                        label,
+                        "",
+                        f"{value:.2f}%" if value is not None else "N/A"
+                    )
+
+            st.markdown("---")
+
+            # Performance Visualization
+            st.subheader("📉 Performance Comparison")
+            if not combined.empty:
+                fig = px.line(
+                    combined,
+                    x="Date",
+                    y="Normalized",
+                    color="Index",
+                    title="",
+                    template="plotly_white",
+                    height=500
+                ).update_layout(
+                    xaxis_title="Market Hours" if period == "1d" else "Date",
+                    hovermode="x unified",
+                    legend_title_text="",
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="right",
+                        x=1
+                    ),
+                    yaxis_title="Performance (%)"
+                )
+                
+                if period == "1d":
+                    fig.update_xaxes(
+                        tickformat="%H:%M",
+                        rangeslider_visible=True
+                    )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("Could not generate performance chart")
+
+            st.markdown("---")
 
             # Portfolio Insights
             st.subheader("🧠 Portfolio Insights")
             insights = []
+            
+            if portfolio_end_value > 0:
+                # Concentration risk
+                df["Weight"] = df["Market Value"] / portfolio_end_value
+                heavy = df[df["Weight"] > 0.1]
+                for _, row in heavy.iterrows():
+                    insights.append(f"⚠️ **{row['Ticker']}** ({row['Weight']:.1%}) exceeds 10% allocation")
 
-            # Overconcentration check
-            top_holdings = df.sort_values("Market Value", ascending=False)
-            overweights = top_holdings[top_holdings["Market Value"] / total_value > 0.10]
-            for _, row in overweights.iterrows():
-                pct = row["Market Value"] / total_value * 100
-                insights.append(f"⚠️ **{row['Ticker']}** is {pct:.1f}% of portfolio (over 10%)")
+                # Cash position
+                cash = df[df["Asset Class"] == "Money Market"]["Market Value"].sum()
+                cash_pct = cash / portfolio_end_value
+                if cash_pct > 0.15:
+                    insights.append(f"🪙 Cash allocation ({cash_pct:.1%}) may create drag")
 
-            # Cash drag check
-            cash_assets = df[df["Asset Class"].str.contains("Money Market|Cash", case=False, na=False)]
-            cash_pct = cash_assets["Market Value"].sum() / total_value * 100
-            if cash_pct > 15:
-                insights.append(f"🪙 You have {cash_pct:.1f}% in cash/money markets (>15%)")
-
-            # Big movers
-            for _, row in df.iterrows():
-                ticker = row["Ticker"]
+            # Price movements
+            for ticker in df["Ticker"].unique():
+                if is_money_market(ticker):
+                    continue
+                
                 try:
-                    if not is_money_market(ticker):
-                        hist = fetch_market_data(ticker, period)
-                        if hist and not hist.empty:
-                            change = (hist["Close"].iloc[-1] / hist["Close"].iloc[0] - 1) * 100
-                            if change <= -10:
-                                insights.append(f"🔻 **{ticker}** dropped {abs(change):.1f}% ({selected_period})")
-                            if change >= 10:
-                                insights.append(f"🚀 **{ticker}** gained {change:.1f}% ({selected_period})")
+                    result = fetch_market_data(ticker, ticker, period)
+                    if result and len(result["data"]) > 1:
+                        change = result["pct_change"]
+                        if change <= -10:
+                            insights.append(f"🔻 **{ticker}** dropped {abs(change):.1f}%")
+                        elif change >= 20:
+                            insights.append(f"🚀 **{ticker}** gained {change:.1f}%")
                 except Exception:
                     pass
 
             # Earnings alerts
-            for _, row in df.iterrows():
-                ticker = row["Ticker"]
+            for ticker in df["Ticker"].unique():
+                if is_money_market(ticker):
+                    continue
+                
                 try:
-                    if not is_money_market(ticker):
-                        cal = yf.Ticker(ticker).calendar
-                        if not cal.empty:
-                            earnings_date = cal.EarningsDate.max()
-                            if pd.notna(earnings_date):
-                                days = (earnings_date.date() - datetime.date.today()).days
-                                if 0 <= days <= 14:
-                                    insights.append(f"📅 **{ticker}** earnings in {days} days (~{earnings_date.strftime('%b %d')})")
+                    cal = yf.Ticker(ticker).calendar
+                    if not cal.empty:
+                        earnings_date = cal.EarningsDate.max()
+                        if pd.notna(earnings_date):
+                            days = (earnings_date.date() - datetime.date.today()).days
+                            if 0 <= days <= 14:
+                                insights.append(f"📅 **{ticker}** earnings in {days} days")
                 except Exception:
                     pass
 
+            # Display insights
             if insights:
                 insight_order = {"⚠️": 1, "🪙": 2, "🔻": 3, "🚀": 4, "📅": 5}
-                insights.sort(key=lambda x: insight_order.get(x.split()[0], 6))
+                insights.sort(key=lambda x: insight_order.get(x[:2], 6))
                 
                 with st.expander("📌 Active Alerts (Top 5)", expanded=True):
                     for note in insights[:5]:
@@ -287,7 +395,7 @@ def main():
                     
                     if len(insights) > 5:
                         st.markdown("**Additional alerts:**")
-                        for note in insights[5:]:
+                        for note in insights[5:10]:  # Show max 10 total
                             st.markdown(f"- {note}")
                     
                     st.download_button(
@@ -300,70 +408,16 @@ def main():
 
             st.markdown("---")
 
-            # Performance Metrics
-            st.subheader("📈 Performance Metrics")
-            cols = st.columns(1 + len(COMPARISON_TICKERS))
-            with cols[0]:
-                if portfolio_change is not None:
-                    delta_color = "inverse" if portfolio_change < 0 else "normal"
-                    st.metric(
-                        "My Portfolio",
-                        f"${total_value:,.2f}",
-                        f"{portfolio_change:.2f}%",
-                        delta_color=delta_color
-                    )
-            
-            for i, (label, value) in enumerate(benchmark_data.items()):
-                with cols[i+1]:
-                    st.metric(
-                        label,
-                        "",
-                        f"{value:.2f}%" if value is not None else "N/A"
-                    )
-
-            st.markdown("---")
-
-            # Performance Visualization
-            st.subheader("📉 Intraday Performance Comparison" if period == "1d" else "📊 Historical Performance")
-            if benchmark_series:
-                try:
-                    chart_data = pd.concat(benchmark_series).sort_values('Date')
-                    fig = px.line(
-                        chart_data.dropna(), 
-                        x="Date", 
-                        y="Normalized Price", 
-                        color="Index",
-                        title="",
-                        template="plotly_white",
-                        height=500
-                    ).update_layout(
-                        xaxis_title="Market Hours" if period == "1d" else "Date",
-                        hovermode="x unified",
-                        legend_title_text="Benchmarks",
-                        legend=dict(
-                            orientation="h",
-                            yanchor="bottom",
-                            y=1.02,
-                            xanchor="right",
-                            x=1
-                        ),
-                        yaxis_title="Normalized Performance (%)"
-                    )
-                    
-                    if period == "1d":
-                        fig.update_xaxes(
-                            tickformat="%H:%M",
-                            rangeslider_visible=True
-                        )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Chart error: {str(e)}")
-
-            st.markdown("---")
-
             # Portfolio Composition
             st.subheader("📊 Portfolio Composition")
+            
+            # Merge price data
+            price_df = pd.DataFrame(price_data)
+            df = df.merge(price_df, on="Ticker", how="left")
+            df["Market Value"] = df["Quantity"] * df["Current Price"]
+            total_value = df["Market Value"].sum()
+
+            # Metrics
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Total Value", f"${total_value:,.2f}")
