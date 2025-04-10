@@ -262,14 +262,28 @@ if uploaded_files:
             st.download_button("📥 Download Insights Report", insights_buffer, file_name="portfolio_insights.txt", mime="text/plain")
 
             # ── Performance Grid ──
-            st.subheader("📦 Normalized Performance Comparison")
             if portfolio_normalized is not None and benchmark_series:
                 all_perf = pd.concat([portfolio_normalized] + benchmark_series)
-                fig = px.line(all_perf, x="Date", y="Normalized Price", color="Index", title="Normalized Performance")
-                fig.update_layout(height=400, legend_title="")
+                fig = px.line(all_perf, x="Date", y="Normalized Price", color="Index", title="Portfolio vs Benchmarks")
+                fig.update_layout(height=400, legend_title="", margin=dict(l=20, r=20, t=40, b=20))
                 st.plotly_chart(fig, use_container_width=True)
 
-            # ── Summary Table ──
+            st.markdown("### 💹 Summary Performance")
+            cols = st.columns(4)
+            perf_data = [
+                ("My Portfolio", portfolio_change),
+                ("S&P 500", benchmark_data.get("S&P 500")),
+                ("Nasdaq 100", benchmark_data.get("Nasdaq 100")),
+                ("Euro Stoxx 50", benchmark_data.get("Euro Stoxx 50"))
+            ]
+            for i, (label, change) in enumerate(perf_data):
+                color = "green" if change and change > 0 else "red" if change and change < 0 else "gray"
+                icon = "⬆️" if change and change > 0 else "⬇️" if change and change < 0 else "➖"
+                cols[i].markdown(f"**{label}**
+
+<span style='color:{color}; font-size: 24px;'>{icon} {change:.2f}%</span>", unsafe_allow_html=True)
+
+            # Removed summary table section
             st.subheader("📊 Performance Summary Table")
             summary_data = {"My Portfolio": portfolio_change}
             summary_data.update(benchmark_data)
@@ -297,4 +311,3 @@ if uploaded_files:
                 fig_acct = px.pie(alloc_by_acct, values="Market Value", names="Account", title="By Account")
                 st.plotly_chart(fig_acct, use_container_width=True)
 
-    
