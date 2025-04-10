@@ -4,7 +4,6 @@ import yfinance as yf
 import plotly.express as px
 import datetime
 import os
-import io
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -57,10 +56,10 @@ with st.sidebar.expander("📦 Version History", expanded=False):
 def clean_portfolio(df):
     """Clean and standardize portfolio dataframe"""
     df.columns = [col.strip().capitalize() for col in df.columns]
-    df = df[['Ticker', 'Quantity', 'Account']] if 'Account' in df.columns else df[['Ticker', 'Quantity']]
-    df = df[df['Ticker'].str.upper() != "CUR:USD"]
-    df['Ticker'] = df['Ticker'].str.replace("CUR:GE", "GE")
-    return df
+    keep_cols = ['Ticker', 'Quantity']
+    if 'Account' in df.columns:
+        keep_cols.append('Account')
+    return df[keep_cols].dropna(subset=['Ticker', 'Quantity'])
 
 def is_money_market(ticker):
     """Check if ticker is a money market fund"""
@@ -114,7 +113,7 @@ with st.sidebar.expander("🔧 Filters & Settings", expanded=True):
     selected_period = st.selectbox(
         "Performance Period", 
         list(PERIOD_MAP.keys()), 
-        index=0
+        index=0  # Default to Today
     )
     st.caption("Tip: Money market funds are automatically valued at $1.00")
 
@@ -150,11 +149,8 @@ if uploaded_files:
         st.stop()
 
     df = pd.concat(dataframes, ignore_index=True)
+    st.success("✅ Portfolio data loaded successfully")
     
-    if not all(col in df.columns for col in ["Ticker", "Quantity"]):
-        st.error("Uploaded files must contain at least 'Ticker' and 'Quantity' columns")
-        st.stop()
-
     # Data Processing
     period = PERIOD_MAP[selected_period]
     benchmark_data = {}
@@ -331,9 +327,9 @@ if uploaded_files:
                 st.markdown(f"- {note}")
             
             if len(insights) > 5:
-                with st.expander("See all alerts"):
-                    for note in insights[5:]:
-                        st.markdown(f"- {note}")
+                st.markdown("**Additional alerts:**")
+                for note in insights[5:]:
+                    st.markdown(f"- {note}")
             
             insights_text = "\n".join(insights)
             st.download_button(
