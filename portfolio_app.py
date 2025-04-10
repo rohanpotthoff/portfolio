@@ -184,7 +184,7 @@ if uploaded_files:
             except Exception:
                 data.append({"Ticker": ticker, "Current Price": None, "Sector": "Unknown"})
 
-        if portfolio_start_value > 0 and portfolio_normalized is not None:
+        if portfolio_start_value > 0 and portfolio_normalized is not None and not hist.empty:
             portfolio_change = (portfolio_end_value / portfolio_start_value - 1) * 100
             portfolio_normalized = pd.DataFrame({
                 "Date": hist.index,
@@ -297,3 +297,4 @@ if uploaded_files:
                 fig_acct = px.pie(alloc_by_acct, values="Market Value", names="Account", title="By Account")
                 st.plotly_chart(fig_acct, use_container_width=True)
 
+    
