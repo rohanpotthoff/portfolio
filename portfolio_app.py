@@ -29,8 +29,7 @@ st.markdown("""
 - Sector fallback logic for ETFs, Mutual Funds, Crypto
 - Duplicate holdings detection across multiple uploads
 
-'>ℹ️ Hover for contact info & version notes</small>
-""", unsafe_allow_html=True), unsafe_allow_html=True)
+'>ℹ️ Hover for contact info & version notes</small>""", unsafe_allow_html=True)
 
 # File uploader placed at the top
 uploaded_files = st.file_uploader("Upload your holdings CSV or Excel file", type=["csv", "xlsx"], accept_multiple_files=True)
@@ -56,14 +55,12 @@ comparison_tickers = {
     "Euro Stoxx 50": "^STOXX50E"
 }
 
-# Normalize tickers and auto-clean
 def clean_portfolio(df):
     df.columns = [col.strip().capitalize() for col in df.columns]
     df = df[df['Ticker'].str.upper() != "CUR:USD"]
     df['Ticker'] = df['Ticker'].str.replace("CUR:GE", "GE")
     return df
 
-# Merge multiple portfolios and warn about potential duplicates
 if uploaded_files:
     dataframes = []
     tickers_seen = set()
@@ -94,8 +91,8 @@ if uploaded_files:
         period = period_map[selected_period]
         benchmark_data = {}
         benchmark_series = []
-        portfolio_series = []
         portfolio_change = None
+        portfolio_normalized = None
 
         for label, symbol in comparison_tickers.items():
             try:
@@ -108,23 +105,18 @@ if uploaded_files:
                     benchmark_data[label] = pct_change
                     hist = ticker_obj.history(period="2d", interval="5m")
                     hist = hist[hist.index.date == pd.Timestamp.today().date()]
-                    norm_price = hist["Close"] / hist["Close"].iloc[0] * 100 if not hist.empty else [100]
                 else:
                     hist = ticker_obj.history(period=period)
-                    norm_price = hist["Close"] / hist["Close"].iloc[0] * 100 if not hist.empty else [100]
                     pct_change = (hist["Close"].iloc[-1] / hist["Close"].iloc[0] - 1) * 100 if not hist.empty else 0
                     benchmark_data[label] = pct_change
+
                 if not hist.empty:
                     norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
-                    pct_change = (hist["Close"].iloc[-1] / hist["Close"].iloc[0] - 1) * 100
-                    benchmark_data[label] = pct_change
                     benchmark_series.append(pd.DataFrame({
                         "Date": hist.index,
                         "Normalized Price": norm_price,
                         "Index": label
                     }))
-                else:
-                    benchmark_data[label] = None
             except Exception:
                 benchmark_data[label] = None
 
@@ -132,7 +124,6 @@ if uploaded_files:
         data = []
         portfolio_start_value = 0
         portfolio_end_value = 0
-        portfolio_normalized = None
 
         for ticker in tickers:
             try:
@@ -147,11 +138,11 @@ if uploaded_files:
                     end_price = price
                 else:
                     hist = stock.history(period=period)
-                    price = stock.info.get("regularMarketPrice") or stock.info.get("currentPrice")
+                    info = stock.info
+                    price = info.get("regularMarketPrice") or info.get("currentPrice")
                     start_price = hist["Close"].iloc[0] if not hist.empty else price
                     end_price = hist["Close"].iloc[-1] if not hist.empty else price
-                info = stock.info
-                price = info.get("regularMarketPrice") or info.get("currentPrice")
+
                 sector = info.get("sector")
                 if not sector:
                     if "-USD" in ticker:
@@ -163,8 +154,6 @@ if uploaded_files:
 
                 df_ticker = df[df["Ticker"] == ticker]
                 quantity = df_ticker["Quantity"].sum()
-                start_price = hist["Close"].iloc[0] if not hist.empty else price
-                end_price = hist["Close"].iloc[-1] if not hist.empty else price
                 portfolio_start_value += quantity * start_price
                 portfolio_end_value += quantity * end_price
 
@@ -172,17 +161,16 @@ if uploaded_files:
                     norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
                     if portfolio_normalized is None:
                         portfolio_normalized = norm_price * quantity
-                else:
-                    portfolio_normalized += norm_price * quantity
+                    else:
+                        portfolio_normalized += norm_price * quantity
 
                 data.append({"Ticker": ticker, "Current Price": end_price, "Sector": sector})
             except Exception:
                 data.append({"Ticker": ticker, "Current Price": None, "Sector": "Unknown"})
 
-        if portfolio_start_value > 0:
+        if portfolio_start_value > 0 and portfolio_normalized is not None:
             portfolio_change = (portfolio_end_value / portfolio_start_value - 1) * 100
-            if portfolio_series:
-                portfolio_normalized = pd.DataFrame({
+            portfolio_normalized = pd.DataFrame({
                 "Date": hist.index,
                 "Normalized Price": portfolio_normalized / portfolio_start_value * 100,
                 "Index": "My Portfolio"
@@ -197,7 +185,6 @@ if uploaded_files:
             selected_accounts = st.sidebar.multiselect("Filter by account(s):", accounts, default=accounts)
             df = df[df["Account"].isin(selected_accounts)]
 
-        # Styled performance grid 2x2 with color
         st.subheader("🔁 Performance Summary")
         metric_cols = st.columns(2)
         perf_metrics = [
@@ -212,13 +199,11 @@ if uploaded_files:
             with metric_cols[i % 2]:
                 st.markdown(f"<div style='font-size: 14px; color: {color};'>{label}: {formatted_value}</div>", unsafe_allow_html=True)
 
-        # Normalized benchmark chart with portfolio
         if benchmark_series:
             all_series = pd.concat(benchmark_series + ([portfolio_normalized] if portfolio_normalized is not None else []))
             fig = px.line(all_series, x="Date", y="Normalized Price", color="Index", title="Normalized Performance Comparison")
             st.plotly_chart(fig, use_container_width=True)
 
-        # Portfolio overview
         st.subheader("📊 Portfolio Overview")
         st.dataframe(df)
         total_value = df["Market Value"].sum()
