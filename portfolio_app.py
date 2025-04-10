@@ -176,6 +176,7 @@ if uploaded_files:
                 if not hist.empty:
                     norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
                     if portfolio_normalized is None:
+                        portfolio_dates = hist.index
                         portfolio_normalized = norm_price * quantity
                     else:
                         portfolio_normalized += norm_price * quantity
@@ -184,7 +185,7 @@ if uploaded_files:
             except Exception:
                 data.append({"Ticker": ticker, "Current Price": None, "Sector": "Unknown"})
 
-        if portfolio_start_value > 0 and portfolio_normalized is not None and not hist.empty:
+        if portfolio_start_value > 0 and portfolio_normalized is not None and 'portfolio_dates' in locals():
             portfolio_change = (portfolio_end_value / portfolio_start_value - 1) * 100
             portfolio_normalized = pd.DataFrame({
                 "Date": hist.index,
