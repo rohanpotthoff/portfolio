@@ -279,3 +279,21 @@ if uploaded_files:
             perf_df_display = perf_df.drop(columns="Color")
             st.dataframe(perf_df_display.set_index("Index"))
 
+            # ── Portfolio Holdings Grid ──
+            st.subheader("📋 Holdings Overview")
+            display_cols = ["Ticker", "Quantity", "Current Price", "Market Value"]
+            if "Account" in df.columns:
+                display_cols.insert(1, "Account")
+            st.dataframe(df[display_cols].sort_values("Market Value", ascending=False).reset_index(drop=True))
+
+            # ── Allocation Charts ──
+            st.subheader("📎 Portfolio Allocation")
+            alloc_by_sector = df.groupby("Sector")["Market Value"].sum().reset_index()
+            fig_sector = px.pie(alloc_by_sector, values="Market Value", names="Sector", title="By Sector")
+            st.plotly_chart(fig_sector, use_container_width=True)
+
+            if "Account" in df.columns:
+                alloc_by_acct = df.groupby("Account")["Market Value"].sum().reset_index()
+                fig_acct = px.pie(alloc_by_acct, values="Market Value", names="Account", title="By Account")
+                st.plotly_chart(fig_acct, use_container_width=True)
+
