@@ -57,6 +57,7 @@ comparison_tickers = {
 }
 
 def clean_portfolio(df):
+    # Capitalize columns once after full concat
     df.columns = [col.strip().capitalize() for col in df.columns]
     df = df[df['Ticker'].str.upper() != "CUR:USD"]
     df['Ticker'] = df['Ticker'].str.replace("CUR:GE", "GE")
@@ -233,7 +234,8 @@ if uploaded_files:
                         insights.append(f"🔻 **{ticker}** dropped {change:.1f}% over selected period.")
                     if change >= 10:
                         insights.append(f"🚀 **{ticker}** gained {change:.1f}% over selected period.")
-            except: pass
+            except Exception as e:
+                st.warning(f"Error processing {ticker}: {e}")
 
         # Upcoming earnings
         for i, row in df.iterrows():
@@ -256,6 +258,5 @@ if uploaded_files:
 
             # Export insights to download
             import io
-            insights_buffer = io.StringIO('
-'.join(insights))
-            st.download_button("📥 Download Insights Report", insights_buffer, file_name="portfolio_insights.txt", mime="text/plain")
+            insights_buffer = io.StringIO(os.linesep.join(insights))
+
