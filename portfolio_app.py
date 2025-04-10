@@ -396,63 +396,103 @@ if uploaded_files:
 
     st.markdown("---")  # Keep this divider here
 
-    # Performance Chart
-    if benchmark_series:
-        selected_tickers = st.multiselect(
-            "Add holdings to chart:", 
-            options=df['Ticker'].unique(),
-            default=[],
-            help="Compare individual holdings against benchmarks"
+if benchmark_series:
+    selected_tickers = st.multiselect(
+        "Add holdings to chart:", 
+        options=df['Ticker'].unique(),
+        default=[],
+        help="Compare individual holdings against benchmarks"
+    )
+    
+    # Add selected holdings to chart
+    for ticker in selected_tickers:
+        try:
+            if is_money_market(ticker):
+                # Create dummy data matching the benchmark timeframe
+                base_dates = benchmark_series[0]['Date']
+                hist = pd.DataFrame({'Close': [1.0]*len(base_dates)}, index=base_dates)
+            else:
+                stock = yf.Ticker(ticker)
+                
+                if period == "1d":
+                    # Get intraday data with 5m intervals
+                    hist = stock.history(period="1d", interval="5m")
+                else:
+                    hist = stock.history(period=period)
+            
+            if not hist.empty:
+                # Align dates with benchmark data
+                start_date = hist.index.min()
+                norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
+                
+                benchmark_series.append(pd.DataFrame({
+                    "Date": hist.index,
+                    "Normalized Price": norm_price,
+                    "Index": ticker
+                }))
+        except Exception as e:
+            st.warning(f"Error processing {ticker}: {str(e)}")
+
+    try:
+        # Find common start date for all series
+        min_date = min(series['Date'].min() for series in benchmark_series)
+        max_date = max(series['Date'].max() for series in benchmark_series)
+        
+        # Filter and normalize all series
+        aligned_series = []
+        for series in benchmark_series:
+            filtered = series[series['Date'] >= min_date]
+            if period == "1d":
+                # Convert to time-only format for intraday
+                filtered['Date'] = filtered['Date'].dt.time
+            aligned_series.append(filtered)
+        
+        all_series = pd.concat(aligned_series)
+        
+        if portfolio_normalized is not None:
+            portfolio_filtered = portfolio_normalized[portfolio_normalized['Date'] >= min_date]
+            if period == "1d":
+                portfolio_filtered['Date'] = portfolio_filtered['Date'].dt.time
+            all_series = pd.concat([all_series, portfolio_filtered])
+
+        fig = px.line(
+            all_series, 
+            x="Date", 
+            y="Normalized Price", 
+            color="Index",
+            title=f"Performance Comparison ({selected_period})",
+            template="plotly_white",
+            height=500
         )
         
-        # Add selected holdings to chart
-        for ticker in selected_tickers:
-            try:
-                if is_money_market(ticker):
-                    hist = pd.DataFrame({'Close': [1.0]*len(benchmark_series[0])})
-                else:
-                    stock = yf.Ticker(ticker)
-                    hist = stock.history(period=period)
-                
-                if not hist.empty:
-                    norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
-                    benchmark_series.append(pd.DataFrame({
-                        "Date": hist.index,
-                        "Normalized Price": norm_price,
-                        "Index": ticker
-                    }))
-            except Exception as e:
-                st.warning(f"Error processing {ticker}: {str(e)}")
-
-        try:
-            all_series = pd.concat(benchmark_series)
-            if portfolio_normalized is not None:
-                all_series = pd.concat([all_series, portfolio_normalized])
+        # Format x-axis based on period
+        if period == "1d":
+            fig.update_xaxes(
+                type='category',  # Treat time as categorical for intraday
+                tickformat="%H:%M",
+                title="Market Hours"
+            )
+        else:
+            fig.update_xaxes(
+                title="Date"
+            )
             
-            fig = px.line(
-                all_series, 
-                x="Date", 
-                y="Normalized Price", 
-                color="Index",
-                title=f"Performance Comparison ({selected_period})",
-                template="plotly_white",
-                height=500
-            )
-            fig.update_layout(
-                title={
-                    'text': f"Performance Comparison ({selected_period})",
-                    'y':0.95,
-                    'x':0.5,
-                    'xanchor': 'center',
-                    'yanchor': 'top',
-                    'font': dict(size=20)
-                },
-                hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        except Exception as e:
-            st.error(f"Error generating chart: {str(e)}")
+        fig.update_layout(
+            title={
+                'text': f"Performance Comparison ({selected_period})",
+                'y':0.95,
+                'x':0.5,
+                'xanchor': 'center',
+                'yanchor': 'top',
+                'font': dict(size=20)
+            },
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"Error generating chart: {str(e)}")
     
     # Portfolio Overview
     st.subheader("📊 Portfolio Composition")
