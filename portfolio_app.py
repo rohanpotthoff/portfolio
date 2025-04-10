@@ -342,9 +342,10 @@ if uploaded_files:
     
     st.markdown("---")
 
-    # Performance Summary
-
-    st.subheader("📈 Performance Metrics")
+# ────────────────────────────────────────────────────────────────────────────────
+# Performance Summary (Corrected Placement)
+# ────────────────────────────────────────────────────────────────────────────────
+    st.subheader("�� Performance Metrics")
     
     # Create two rows - top row for portfolio, bottom for benchmarks
     top_cols = st.columns(1)
@@ -371,29 +372,30 @@ if uploaded_files:
         else:
             st.metric("My Portfolio", "N/A")
 
-# Benchmarks
-st.markdown("### Market Benchmarks")
-for i, (label, value) in enumerate(benchmark_data.items()):
-    with bench_cols[i]:
-        if value is not None:
-            delta_arrow = "↑" if value >= 0 else "↓" if value < 0 else ""
-            color = "#2ECC40" if value > 0 else "#FF4136" if value < 0 else "#AAAAAA"
-            display_value = f"""
-            <div style="display: flex; align-items: center; gap: 4px;">
-                <span>{abs(value):.2f}%</span>
-                <span style="color: {color}; font-size: 1.1em;">{delta_arrow}</span>
-            </div>
-            """
-            st.markdown(display_value, unsafe_allow_html=True)
-            st.metric(
-                label=label,
-                value="",
-                delta=None,
-                help=f"{label} {selected_period} performance"
-            )
-        else:
-            st.metric(label, "N/A")
-    st.markdown("---")
+    # Benchmarks
+    st.markdown("### Market Benchmarks")
+    for i, (label, value) in enumerate(benchmark_data.items()):
+        with bench_cols[i]:
+            if value is not None:
+                delta_arrow = "↑" if value >= 0 else "↓" if value < 0 else ""
+                color = "#2ECC40" if value > 0 else "#FF4136" if value < 0 else "#AAAAAA"
+                display_value = f"""
+                <div style="display: flex; align-items: center; gap: 4px;">
+                    <span>{abs(value):.2f}%</span>
+                    <span style="color: {color}; font-size: 1.1em;">{delta_arrow}</span>
+                </div>
+                """
+                st.markdown(display_value, unsafe_allow_html=True)
+                st.metric(
+                    label=label,
+                    value="",
+                    delta=None,
+                    help=f"{label} {selected_period} performance"
+                )
+            else:
+                st.metric(label, "N/A")
+
+    st.markdown("---")  # Keep this divider here
 
     # Performance Chart
     if benchmark_series:
