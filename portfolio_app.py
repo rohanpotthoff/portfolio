@@ -34,18 +34,21 @@ PERIOD_MAP = {
 # ────────────────────────────────────────────────────────────────────────────────
 with st.sidebar.expander("📦 Version History", expanded=False):
     st.markdown("""
+- **v3.2**  
+  - Added earnings alerts for next 2 weeks  
+  - Fixed asset class detection  
+  - Added creator credits  
+  - UI spacing refinements  
+
 - **v3.1**  
-  - Added special handling for money market funds (XX tickers)  
-  - Modernized performance summary display  
-  - Improved error handling for missing price data  
-  - Added visual spacing between sections  
-  - Fixed normalization data length bugs  
+  - Added money market fund handling  
+  - Modernized performance metrics  
+  - Improved error handling  
 
 - **v3.0**  
-  - Portfolio insights with alerts system  
-  - Benchmark comparison charts  
-  - Sector/asset class breakdowns  
-  - Historical snapshot tracking  
+  - Portfolio insights system  
+  - Benchmark comparisons  
+  - Sector/asset breakdowns  
     """)
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -79,7 +82,31 @@ def is_money_market(ticker):
 # UI Header
 # ────────────────────────────────────────────────────────────────────────────────
 st.title("📊 Portfolio Tracker Pro")
-st.caption("Version 3.1 | Tracking your investments with precision")
+st.caption("Version 3.2 | Tracking your investments with precision • Created by Rohan Potthoff")
+
+# Social icons
+st.markdown("""
+<style>
+.social-icons {
+    display: flex;
+    gap: 15px;
+    margin-top: -10px;
+    margin-bottom: 10px;
+}
+.social-icons a {
+    color: #9e9e9e !important;
+    text-decoration: none;
+    font-size: 14px;
+}
+.social-icons a:hover {
+    color: #1DA1F2 !important;
+}
+</style>
+<div class="social-icons">
+    <a href="mailto:rohanpotthoff@gmail.com">✉️ Email</a>
+    <a href="https://www.linkedin.com/in/rohanpotthoff" target="_blank">🔗 LinkedIn</a>
+</div>
+""", unsafe_allow_html=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # File Upload
@@ -98,18 +125,15 @@ with st.sidebar.expander("🔧 Filters & Settings", expanded=True):
     selected_period = st.selectbox(
         "Performance Period", 
         list(PERIOD_MAP.keys()), 
-        index=5  # Default to YTD
+        index=0  # Default to Today
     )
-    st.markdown("---")
     st.caption("Tip: Money market funds are automatically valued at $1.00")
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Main Processing
 # ────────────────────────────────────────────────────────────────────────────────
 if uploaded_files:
-    # ────────────────────────────────────────────────────────────────────────────
     # Data Loading & Cleaning
-    # ────────────────────────────────────────────────────────────────────────────
     dataframes = []
     tickers_seen = set()
     duplicate_tickers = set()
@@ -146,9 +170,7 @@ if uploaded_files:
     st.success("✅ Portfolio data loaded successfully")
     st.markdown("---")
 
-    # ────────────────────────────────────────────────────────────────────────────
     # Data Processing
-    # ────────────────────────────────────────────────────────────────────────────
     period = PERIOD_MAP[selected_period]
     benchmark_data = {}
     benchmark_series = []
@@ -200,6 +222,7 @@ if uploaded_files:
                 end_price = 1.0
                 hist = None
                 sector = "Cash Equivalent"
+                asset_class = "Money Market"
             else:
                 # Regular security processing
                 stock = yf.Ticker(ticker)
@@ -220,14 +243,12 @@ if uploaded_files:
                     end_price = hist["Close"].iloc[-1] if not hist.empty else price
 
                 # Determine sector/asset class
-                sector = info.get("sector", "")
-                if not sector:
-                    if "-USD" in ticker:
-                        sector = "Cryptocurrency"
-                    elif info.get("quoteType") in ["ETF", "MUTUALFUND"]:
-                        sector = "Fund"
-                    else:
-                        sector = "Unknown"
+                sector = info.get("sector", "Unknown")
+                asset_class = info.get("quoteType", "Stock").title()
+                if asset_class == "Etf":
+                    asset_class = "ETF"
+                elif asset_class == "Mutualfund":
+                    asset_class = "Mutual Fund"
 
             # Handle cases where we still don't have prices
             if start_price is None or end_price is None:
@@ -260,7 +281,8 @@ if uploaded_files:
             price_data.append({
                 "Ticker": ticker, 
                 "Current Price": end_price,
-                "Sector": sector
+                "Sector": sector,
+                "Asset Class": asset_class
             })
 
         except Exception as e:
@@ -268,7 +290,8 @@ if uploaded_files:
             price_data.append({
                 "Ticker": ticker, 
                 "Current Price": 1.0,
-                "Sector": "Unknown"
+                "Sector": "Unknown",
+                "Asset Class": "Unknown"
             })
 
     # Calculate portfolio performance
@@ -302,9 +325,7 @@ if uploaded_files:
         )
         df = df[df["Account"].isin(selected_accounts)]
 
-    # ────────────────────────────────────────────────────────────────────────────
     # Portfolio Insights
-    # ────────────────────────────────────────────────────────────────────────────
     st.subheader("🔍 Portfolio Insights")
     insights = []
 
@@ -316,13 +337,12 @@ if uploaded_files:
         insights.append(f"⚠️ **{row['Ticker']}** is {pct:.1f}% of portfolio (over 10%)")
 
     # Cash drag check
-    if "Asset Class" in df.columns:
-        cash_assets = df[df["Asset Class"].str.contains(
-            "Money Market|Cash", case=False, na=False
-        )]
-        cash_pct = cash_assets["Market Value"].sum() / total_value * 100
-        if cash_pct > 15:
-            insights.append(f"🪙 You have {cash_pct:.1f}% in cash/money markets (>15%)")
+    cash_assets = df[df["Asset Class"].str.contains(
+        "Money Market|Cash", case=False, na=False
+    )]
+    cash_pct = cash_assets["Market Value"].sum() / total_value * 100
+    if cash_pct > 15:
+        insights.append(f"🪙 You have {cash_pct:.1f}% in cash/money markets (>15%)")
 
     # Big movers
     for _, row in df.iterrows():
@@ -339,7 +359,8 @@ if uploaded_files:
         except Exception:
             pass
 
-    # Earnings alerts
+    # Earnings alerts (next 2 weeks)
+    earnings_tickers = set()
     for _, row in df.iterrows():
         ticker = row["Ticker"]
         try:
@@ -350,6 +371,7 @@ if uploaded_files:
                     if pd.notna(earnings_date):
                         days = (earnings_date - pd.Timestamp.today()).days
                         if 0 <= days <= 14:
+                            earnings_tickers.add(ticker)
                             insights.append(
                                 f"📅 **{ticker}** earnings in {days} days "
                                 f"(~{earnings_date.strftime('%b %d')})"
@@ -374,9 +396,7 @@ if uploaded_files:
     
     st.markdown("---")
 
-    # ────────────────────────────────────────────────────────────────────────────
     # Performance Summary
-    # ────────────────────────────────────────────────────────────────────────────
     st.subheader("📈 Performance Metrics")
     
     # Create metrics in a modern layout
@@ -407,9 +427,7 @@ if uploaded_files:
 
     st.markdown("---")
 
-    # ────────────────────────────────────────────────────────────────────────────
     # Performance Chart
-    # ────────────────────────────────────────────────────────────────────────────
     if benchmark_series:
         try:
             all_series = pd.concat(benchmark_series)
@@ -452,11 +470,7 @@ if uploaded_files:
         except Exception as e:
             st.error(f"⚠️ Could not generate performance chart: {str(e)}")
     
-    st.markdown("---")
-
-    # ────────────────────────────────────────────────────────────────────────────
     # Portfolio Overview
-    # ────────────────────────────────────────────────────────────────────────────
     st.subheader("📊 Portfolio Composition")
     
     # Summary metrics
@@ -483,8 +497,8 @@ if uploaded_files:
         st.plotly_chart(fig_sector, use_container_width=True)
 
     with viz_cols[1]:
-        if "Asset Class" in df.columns:
-            asset_group = df.groupby("Asset Class")["Market Value"].sum().reset_index()
+        asset_group = df.groupby("Asset Class")["Market Value"].sum().reset_index()
+        if len(asset_group) > 1:  # Only show if we have multiple asset classes
             fig_asset = px.pie(
                 asset_group, 
                 values="Market Value", 
@@ -494,10 +508,10 @@ if uploaded_files:
             )
             st.plotly_chart(fig_asset, use_container_width=True)
         else:
-            st.info("No asset class data available")
+            st.info("Add 'Asset Class' column for breakdown")
 
     with viz_cols[2]:
-        if "Account" in df.columns:
+        if "Account" in df.columns and df["Account"].nunique() > 1:
             account_group = df.groupby("Account")["Market Value"].sum().reset_index()
             fig_account = px.pie(
                 account_group, 
@@ -508,7 +522,7 @@ if uploaded_files:
             )
             st.plotly_chart(fig_account, use_container_width=True)
         else:
-            st.info("No account data available")
+            st.info("Add multiple accounts for breakdown")
 
     # Raw data
     with st.expander("🔍 View Raw Portfolio Data", expanded=False):
