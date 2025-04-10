@@ -5,6 +5,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import datetime
 import os
+import io
+
 # ── App Configuration ──
 st.set_page_config(page_title="Portfolio Tracker", layout="wide")
 
@@ -16,6 +18,9 @@ with st.sidebar.expander("📦 Version History", expanded=False):
   - Insights export to TXT
   - Fixed string literal bug
 - **v1.0.0.2**
+  - Open-to-current price logic
+  - Benchmark overlay fix
+  - Normalization cleanup
   - Summary grid
   - ETF/Mutual/Crypto fallback
   - Duplicate file detection
@@ -23,15 +28,11 @@ with st.sidebar.expander("📦 Version History", expanded=False):
   - Initial stable version with performance summary
   - Benchmark normalization
   - Sector and asset class breakdowns
-  - Summary grid
-  - ETF/Mutual/Crypto fallback
-  - Duplicate file detection
     """)
 
 # Version header with tooltip
 st.title("📈 Portfolio Tracker Dashboard")
 st.caption("Version 1.0.0.3")
-
 
 # ── Upload Holdings ──
 uploaded_files = st.file_uploader("Upload your holdings CSV or Excel file", type=["csv", "xlsx"], accept_multiple_files=True)
@@ -176,7 +177,6 @@ if uploaded_files:
                 if not hist.empty:
                     norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
                     if portfolio_normalized is None:
-                        portfolio_dates = hist.index
                         portfolio_normalized = norm_price * quantity
                     else:
                         portfolio_normalized += norm_price * quantity
@@ -185,7 +185,7 @@ if uploaded_files:
             except Exception:
                 data.append({"Ticker": ticker, "Current Price": None, "Sector": "Unknown"})
 
-        if portfolio_start_value > 0 and portfolio_normalized is not None and 'portfolio_dates' in locals():
+        if portfolio_start_value > 0 and portfolio_normalized is not None:
             portfolio_change = (portfolio_end_value / portfolio_start_value - 1) * 100
             portfolio_normalized = pd.DataFrame({
                 "Date": hist.index,
@@ -258,55 +258,50 @@ if uploaded_files:
                     st.markdown(f"- {note}")
 
             # Export insights to download
-            import io
-            insights_buffer = io.BytesIO(os.linesep.join(insights).encode("utf-8"))
-            st.download_button("📥 Download Insights Report", insights_buffer, file_name="portfolio_insights.txt", mime="text/plain")
+            insights_text = "\n".join(insights)
+            st.download_button("📥 Download Insights Report", insights_text, file_name="portfolio_insights.txt")
+        else:
+            st.success("No alerts. Portfolio looks healthy.")
 
-            # ── Performance Grid ──
-            if portfolio_normalized is not None and benchmark_series:
-                all_perf = pd.concat([portfolio_normalized] + benchmark_series)
-                fig = px.line(all_perf, x="Date", y="Normalized Price", color="Index", title="Portfolio vs Benchmarks")
-                fig.update_layout(height=400, legend_title="", margin=dict(l=20, r=20, t=40, b=20))
-                st.plotly_chart(fig, use_container_width=True)
+        metric_cols = st.columns(2)
+        perf_metrics = [
+            ("📦 My Portfolio", portfolio_change),
+            *[(f"📊 {label}", benchmark_data.get(label)) for label in comparison_tickers]
+        ]
 
-            st.markdown("### 💹 Summary Performance")
-            cols = st.columns(4)
-            perf_data = [
-                ("My Portfolio", portfolio_change),
-                ("S&P 500", benchmark_data.get("S&P 500")),
-                ("Nasdaq 100", benchmark_data.get("Nasdaq 100")),
-                ("Euro Stoxx 50", benchmark_data.get("Euro Stoxx 50"))
-            ]
-            for i, (label, change) in enumerate(perf_data):
-                color = "green" if change and change > 0 else "red" if change and change < 0 else "gray"
-                icon = "⬆️" if change and change > 0 else "⬇️" if change and change < 0 else "➖"
-                cols[i].markdown(f"**{label}**<br><span style='color:{color}; font-size: 24px;'>{icon} {change:.2f}%</span>", unsafe_allow_html=True)
+        for i, (label, value) in enumerate(perf_metrics):
+            color = "green" if value is not None and value >= 0 else "red"
+            arrow = "⬆️" if value is not None and value >= 0 else "⬇️"
+            formatted_value = f"{value:+.2f}% {arrow}" if value is not None else "N/A"
+            with metric_cols[i % 2]:
+                st.markdown(f"<div style='font-size: 14px; color: {color};'>{label}: {formatted_value}</div>", unsafe_allow_html=True)
 
-            # Removed summary table section
-            st.subheader("📊 Performance Summary Table")
-            summary_data = {"My Portfolio": portfolio_change}
-            summary_data.update(benchmark_data)
-            perf_df = pd.DataFrame(list(summary_data.items()), columns=["Index", "% Change"])
-            perf_df["Trend"] = perf_df["% Change"].apply(lambda x: "⬆️" if x > 0 else "⬇️" if x < 0 else "➖")
-            perf_df["Color"] = perf_df["% Change"].apply(lambda x: "green" if x > 0 else "red" if x < 0 else "gray")
-            perf_df_display = perf_df.drop(columns="Color")
-            st.dataframe(perf_df_display.set_index("Index"))
+        if benchmark_series:
+            all_series = pd.concat(benchmark_series + ([portfolio_normalized] if portfolio_normalized is not None else []))
+            fig = px.line(all_series, x="Date", y="Normalized Price", color="Index", title="Normalized Performance Comparison")
+            st.plotly_chart(fig, use_container_width=True)
 
-            # ── Portfolio Holdings Grid ──
-            st.subheader("📋 Holdings Overview")
-            display_cols = ["Ticker", "Quantity", "Current Price", "Market Value"]
-            if "Account" in df.columns:
-                display_cols.insert(1, "Account")
-            st.dataframe(df[display_cols].sort_values("Market Value", ascending=False).reset_index(drop=True))
+        st.subheader("📊 Portfolio Overview")
+        st.dataframe(df)
+        total_value = df["Market Value"].sum()
+        st.metric("Total Portfolio Value", f"${total_value:,.2f}")
 
-            # ── Allocation Charts ──
-            st.subheader("📎 Portfolio Allocation")
-            alloc_by_sector = df.groupby("Sector")["Market Value"].sum().reset_index()
-            fig_sector = px.pie(alloc_by_sector, values="Market Value", names="Sector", title="By Sector")
+        col1, col2, col3 = st.columns([1.2, 1.2, 1])
+        with col1:
+            sector_group = df.groupby("Sector")["Market Value"].sum().reset_index()
+            fig_sector = px.pie(sector_group, values="Market Value", names="Sector", title="By Sector")
             st.plotly_chart(fig_sector, use_container_width=True)
 
-            if "Account" in df.columns:
-                alloc_by_acct = df.groupby("Account")["Market Value"].sum().reset_index()
-                fig_acct = px.pie(alloc_by_acct, values="Market Value", names="Account", title="By Account")
-                st.plotly_chart(fig_acct, use_container_width=True)
+        with col2:
+            if "Asset Class" in df.columns:
+                asset_group = df.groupby("Asset Class")["Market Value"].sum().reset_index()
+                fig_asset = px.pie(asset_group, values="Market Value", names="Asset Class", title="By Asset Class")
+                st.plotly_chart(fig_asset, use_container_width=True)
 
+        with col3:
+            if "Account" in df.columns:
+                account_group = df.groupby("Account")["Market Value"].sum().reset_index()
+                fig_account = px.pie(account_group, values="Market Value", names="Account", title="By Account")
+                st.plotly_chart(fig_account, use_container_width=True)
+else:
+    st.info("Upload at least one CSV or Excel portfolio file to get started.")
