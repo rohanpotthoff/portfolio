@@ -259,4 +259,23 @@ if uploaded_files:
             # Export insights to download
             import io
             insights_buffer = io.StringIO(os.linesep.join(insights))
+            st.download_button("📥 Download Insights Report", insights_buffer, file_name="portfolio_insights.txt", mime="text/plain")
+
+            # ── Performance Grid ──
+            st.subheader("📦 Normalized Performance Comparison")
+            if portfolio_normalized is not None and benchmark_series:
+                all_perf = pd.concat([portfolio_normalized] + benchmark_series)
+                fig = px.line(all_perf, x="Date", y="Normalized Price", color="Index", title="Normalized Performance")
+                fig.update_layout(height=400, legend_title="")
+                st.plotly_chart(fig, use_container_width=True)
+
+            # ── Summary Table ──
+            st.subheader("📊 Performance Summary Table")
+            summary_data = {"My Portfolio": portfolio_change}
+            summary_data.update(benchmark_data)
+            perf_df = pd.DataFrame(list(summary_data.items()), columns=["Index", "% Change"])
+            perf_df["Trend"] = perf_df["% Change"].apply(lambda x: "⬆️" if x > 0 else "⬇️" if x < 0 else "➖")
+            perf_df["Color"] = perf_df["% Change"].apply(lambda x: "green" if x > 0 else "red" if x < 0 else "gray")
+            perf_df_display = perf_df.drop(columns="Color")
+            st.dataframe(perf_df_display.set_index("Index"))
 
