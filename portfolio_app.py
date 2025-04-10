@@ -17,8 +17,8 @@ st.caption("Version 1.0.0.2")
 uploaded_files = st.file_uploader("Upload your holdings CSV or Excel file", type=["csv", "xlsx"], accept_multiple_files=True)
 
 # Sidebar Filters
-st.sidebar.subheader("Filters")
-period_map = {
+with st.sidebar.expander("🔧 Filters", expanded=True):
+    period_map = {
     "Today": "1d",
     "1W": "7d",
     "1M": "1mo",
@@ -28,14 +28,14 @@ period_map = {
     "1Y": "1y",
     "5Y": "5y"
 }
-selected_period = st.sidebar.selectbox("Select time range", list(period_map.keys()), index=0)
+    selected_period = st.selectbox("Select time range", list(period_map.keys()), index=0)
 
-st.sidebar.markdown("""
----
-**📦 Version History**
-- **v1.0.0.2**: Open-to-current price logic, benchmark overlay fix, normalization cleanup
-- **v1.0.0.1**: Summary grid, ETF/Mutual/Crypto fallback, duplicate file detection
-""")
+    if "Account" in df.columns:
+        accounts = df["Account"].dropna().unique().tolist()
+        selected_accounts = st.multiselect("Filter by account(s):", accounts, default=accounts)
+        df = df[df["Account"].isin(selected_accounts)]
+
+
 
 comparison_tickers = {
     "S&P 500": "^GSPC",
@@ -216,3 +216,17 @@ if uploaded_files:
                 st.plotly_chart(fig_account, use_container_width=True)
 else:
     st.info("Upload at least one CSV or Excel portfolio file to get started.")
+
+    # Sidebar version history (placed at the bottom)
+    st.sidebar.markdown("""
+    ---
+    **📦 Version History**
+    - **v1.0.0.2**
+      - Open-to-current price logic
+      - Benchmark overlay fix
+      - Normalization cleanup
+    - **v1.0.0.1**
+      - Summary grid
+      - ETF/Mutual/Crypto fallback
+      - Duplicate file detection
+    """)
