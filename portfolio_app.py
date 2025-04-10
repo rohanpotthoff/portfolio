@@ -45,7 +45,7 @@ def is_money_market(ticker):
     return ticker in MONEY_MARKET_TICKERS or "XX" in ticker
 
 def fetch_market_data(symbol, period):
-    """Fetch market data with error handling"""
+    """Fetch market data with timezone normalization"""
     try:
         ticker = yf.Ticker(symbol)
         if period == "1d":
@@ -53,7 +53,10 @@ def fetch_market_data(symbol, period):
             hist = hist.between_time('09:30', '16:00')
         else:
             hist = ticker.history(period=period)
-        
+        # Remove timezone information
+        if hist.index.tz is not None:
+            hist.index = hist.index.tz_convert(None)
+        # Rest of the function remains the same
         if not hist.empty:
             norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
             return {
@@ -390,8 +393,8 @@ def main():
             # Create unified timeline
             if period == "1d":
                 market_hours = pd.date_range(
-                    start=pd.Timestamp.today().normalize() + pd.Timedelta(hours=9, minutes=30),
-                    end=pd.Timestamp.today().normalize() + pd.Timedelta(hours=16),
+                    start=pd.Timestamp.today().tz_localize(None).normalize() + pd.Timedelta(hours=9, minutes=30),
+                    end=pd.Timestamp.today().tz_localize(None).normalize() + pd.Timedelta(hours=16),
                     freq='5T'
                 )
                 
