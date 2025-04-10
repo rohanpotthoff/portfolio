@@ -11,25 +11,7 @@ st.set_page_config(page_title="Portfolio Tracker", layout="wide")
 # Version header with tooltip
 st.title("📈 Portfolio Tracker Dashboard")
 st.caption("Version 1.0.0.2")
-st.markdown("""
-<small title='Created by Rohan Potthoff (rohanpotthoff@gmail.com)
 
----
-
-🆕 Version History:
-
-🔹 **v1.0.0.2**
-- Added open-to-current price logic for "Today" performance
-- Fixed indentation bug in portfolio normalization
-- Enhanced benchmark overlay chart
-
-🔹 **v1.0.0.1**
-- Portfolio and benchmark performance summary grid
-- Normalized comparison chart
-- Sector fallback logic for ETFs, Mutual Funds, Crypto
-- Duplicate holdings detection across multiple uploads
-
-'>ℹ️ Hover for contact info & version notes</small>""", unsafe_allow_html=True)
 
 # File uploader placed at the top
 uploaded_files = st.file_uploader("Upload your holdings CSV or Excel file", type=["csv", "xlsx"], accept_multiple_files=True)
@@ -38,16 +20,22 @@ uploaded_files = st.file_uploader("Upload your holdings CSV or Excel file", type
 st.sidebar.subheader("Filters")
 period_map = {
     "Today": "1d",
-    "3D": "5d",
     "1W": "7d",
     "1M": "1mo",
+    "3M": "3mo",
+    "6M": "6mo",
     "YTD": "ytd",
     "1Y": "1y",
-    "5Y": "5y",
-    "10Y": "10y",
-    "20Y": "20y"
+    "5Y": "5y"
 }
 selected_period = st.sidebar.selectbox("Select time range", list(period_map.keys()), index=0)
+
+st.sidebar.markdown("""
+---
+**📦 Version History**
+- **v1.0.0.2**: Open-to-current price logic, benchmark overlay fix, normalization cleanup
+- **v1.0.0.1**: Summary grid, ETF/Mutual/Crypto fallback, duplicate file detection
+""")
 
 comparison_tickers = {
     "S&P 500": "^GSPC",
