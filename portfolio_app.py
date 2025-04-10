@@ -343,31 +343,56 @@ if uploaded_files:
     st.markdown("---")
 
     # Performance Summary
-    st.subheader("📈 Performance Metrics")
-    cols = st.columns(len(COMPARISON_TICKERS) + 1)
-    metrics = [("My Portfolio", portfolio_change)] + [(label, benchmark_data.get(label)) for label in COMPARISON_TICKERS]
-    
-    for i, (label, value) in enumerate(metrics):
-        with cols[i]:
-            if value is not None:
-                delta_arrow = "↑" if value >= 0 else "↓" if value < 0 else ""
-                color = "#2ECC40" if value > 0 else "#FF4136" if value < 0 else "#AAAAAA"
-                display_value = f"""
-                <div style="display: flex; align-items: center; gap: 4px;">
-                    <span>{abs(value):.2f}%</span>
-                    <span style="color: {color}; font-size: 1.1em;">{delta_arrow}</span>
-                </div>
-                """
-                st.markdown(display_value, unsafe_allow_html=True)
-                st.metric(
-                    label=label,
-                    value="",  # Empty value since we're using custom display
-                    delta=None,  # Remove delta parameter
-                    help=f"{label} {selected_period} performance"
-                )
-            else:
-                st.metric(label, "N/A")
 
+    st.subheader("📈 Performance Metrics")
+    
+    # Create two rows - top row for portfolio, bottom for benchmarks
+    top_cols = st.columns(1)
+    bench_cols = st.columns(len(COMPARISON_TICKERS))
+    
+    # Portfolio metric
+    with top_cols[0]:
+        if portfolio_change is not None:
+            delta_arrow = "↑" if portfolio_change >= 0 else "↓" if portfolio_change < 0 else ""
+            color = "#2ECC40" if portfolio_change > 0 else "#FF4136" if portfolio_change < 0 else "#AAAAAA"
+            display_value = f"""
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 24px; font-weight: bold;">{abs(portfolio_change):.2f}%</span>
+                <span style="color: {color}; font-size: 24px;">{delta_arrow}</span>
+            </div>
+            """
+            st.markdown(display_value, unsafe_allow_html=True)
+            st.metric(
+                label="My Portfolio",
+                value="",
+                delta=None,
+                help=f"Portfolio {selected_period} performance"
+            )
+        else:
+            st.metric("My Portfolio", "N/A")
+
+# Benchmarks
+st.markdown("### Market Benchmarks")
+for i, (label, value) in enumerate(benchmark_data.items()):
+    with bench_cols[i]:
+        if value is not None:
+            delta_arrow = "↑" if value >= 0 else "↓" if value < 0 else ""
+            color = "#2ECC40" if value > 0 else "#FF4136" if value < 0 else "#AAAAAA"
+            display_value = f"""
+            <div style="display: flex; align-items: center; gap: 4px;">
+                <span>{abs(value):.2f}%</span>
+                <span style="color: {color}; font-size: 1.1em;">{delta_arrow}</span>
+            </div>
+            """
+            st.markdown(display_value, unsafe_allow_html=True)
+            st.metric(
+                label=label,
+                value="",
+                delta=None,
+                help=f"{label} {selected_period} performance"
+            )
+        else:
+            st.metric(label, "N/A")
     st.markdown("---")
 
     # Performance Chart
