@@ -9,14 +9,15 @@ import io
 # ────────────────────────────────────────────────────────────────────────────────
 # Configuration
 # ────────────────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Portfolio Tracker Pro", layout="wide")
+st.set_page_config(page_title="Portfolio Tracker", layout="wide")
 
 # Constants
-MONEY_MARKET_TICKERS = ["WMPXX", "FNSXX", "VMFXX"]  # Add others as needed
+MONEY_MARKET_TICKERS = ["WMPXX", "FNSXX", "VMFXX"]
 COMPARISON_TICKERS = {
     "S&P 500": "^GSPC",
     "Nasdaq 100": "^NDX",
-    "Euro Stoxx 50": "^STOXX50E"
+    "Euro Stoxx 50": "^STOXX50E",
+    "10Y US Treasury": "^TNX"
 }
 PERIOD_MAP = {
     "Today": "1d",
@@ -34,21 +35,20 @@ PERIOD_MAP = {
 # ────────────────────────────────────────────────────────────────────────────────
 with st.sidebar.expander("📦 Version History", expanded=False):
     st.markdown("""
-- **v3.2**  
-  - Added earnings alerts for next 2 weeks  
-  - Fixed asset class detection  
-  - Added creator credits  
-  - UI spacing refinements  
-
-- **v3.1**  
-  - Added money market fund handling  
-  - Modernized performance metrics  
-  - Improved error handling  
+- **v4.0**  
+  - Renamed to Portfolio Tracker  
+  - Added 10Y Treasury benchmark  
+  - Enhanced performance metrics display  
+  - Individual stock performance comparison  
+  - Improved insights prioritization  
+  - Raw data download capability  
 
 - **v3.0**  
   - Portfolio insights system  
   - Benchmark comparisons  
   - Sector/asset breakdowns  
+  - Earnings alerts  
+  - Money market fund support  
     """)
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -57,22 +57,10 @@ with st.sidebar.expander("📦 Version History", expanded=False):
 def clean_portfolio(df):
     """Clean and standardize portfolio dataframe"""
     df.columns = [col.strip().capitalize() for col in df.columns]
+    df = df[['Ticker', 'Quantity', 'Account']] if 'Account' in df.columns else df[['Ticker', 'Quantity']]
     df = df[df['Ticker'].str.upper() != "CUR:USD"]
     df['Ticker'] = df['Ticker'].str.replace("CUR:GE", "GE")
     return df
-
-def save_daily_snapshot(df):
-    """Save portfolio snapshot for historical tracking"""
-    today = datetime.date.today().isoformat()
-    snapshot_path = "portfolio_history.csv"
-    df["Date"] = today
-    
-    if os.path.exists(snapshot_path):
-        prev = pd.read_csv(snapshot_path)
-        combined = pd.concat([prev, df], ignore_index=True)
-    else:
-        combined = df
-    combined.to_csv(snapshot_path, index=False)
 
 def is_money_market(ticker):
     """Check if ticker is a money market fund"""
@@ -81,10 +69,10 @@ def is_money_market(ticker):
 # ────────────────────────────────────────────────────────────────────────────────
 # UI Header
 # ────────────────────────────────────────────────────────────────────────────────
-st.title("📊 Portfolio Tracker Pro")
-st.caption("Version 3.2 | Tracking your investments with precision • Created by Rohan Potthoff")
+st.title("📊 Portfolio Tracker")
+st.caption("Version 4.0 | Created by Rohan Potthoff")
 
-# Social icons
+# Social icons and divider
 st.markdown("""
 <style>
 .social-icons {
@@ -106,16 +94,17 @@ st.markdown("""
     <a href="mailto:rohanpotthoff@gmail.com">✉️ Email</a>
     <a href="https://www.linkedin.com/in/rohanpotthoff" target="_blank">🔗 LinkedIn</a>
 </div>
+<hr style='margin-bottom:20px'>
 """, unsafe_allow_html=True)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # File Upload
 # ────────────────────────────────────────────────────────────────────────────────
 uploaded_files = st.file_uploader(
-    "Upload your portfolio holdings (CSV/Excel)", 
+    "Upload portfolio holdings (CSV/Excel)", 
     type=["csv", "xlsx"], 
     accept_multiple_files=True,
-    help="Files should contain 'Ticker' and 'Quantity' columns"
+    help="Required columns: Ticker, Quantity | Optional: Account"
 )
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -125,7 +114,7 @@ with st.sidebar.expander("🔧 Filters & Settings", expanded=True):
     selected_period = st.selectbox(
         "Performance Period", 
         list(PERIOD_MAP.keys()), 
-        index=0  # Default to Today
+        index=0
     )
     st.caption("Tip: Money market funds are automatically valued at $1.00")
 
@@ -161,14 +150,10 @@ if uploaded_files:
         st.stop()
 
     df = pd.concat(dataframes, ignore_index=True)
-    save_daily_snapshot(df.copy())
     
     if not all(col in df.columns for col in ["Ticker", "Quantity"]):
         st.error("Uploaded files must contain at least 'Ticker' and 'Quantity' columns")
         st.stop()
-
-    st.success("✅ Portfolio data loaded successfully")
-    st.markdown("---")
 
     # Data Processing
     period = PERIOD_MAP[selected_period]
@@ -216,7 +201,6 @@ if uploaded_files:
     for ticker in tickers:
         try:
             if is_money_market(ticker):
-                # Special handling for money market funds
                 current_price = 1.0
                 start_price = 1.0
                 end_price = 1.0
@@ -224,7 +208,6 @@ if uploaded_files:
                 sector = "Cash Equivalent"
                 asset_class = "Money Market"
             else:
-                # Regular security processing
                 stock = yf.Ticker(ticker)
                 
                 if period == "1d":
@@ -242,41 +225,21 @@ if uploaded_files:
                     start_price = hist["Close"].iloc[0] if not hist.empty else price
                     end_price = hist["Close"].iloc[-1] if not hist.empty else price
 
-                # Determine sector/asset class
                 sector = info.get("sector", "Unknown")
                 asset_class = info.get("quoteType", "Stock").title()
-                if asset_class == "Etf":
-                    asset_class = "ETF"
-                elif asset_class == "Mutualfund":
-                    asset_class = "Mutual Fund"
+                asset_class = "ETF" if asset_class == "Etf" else asset_class
 
-            # Handle cases where we still don't have prices
-            if start_price is None or end_price is None:
-                st.warning(f"⚠️ Missing price data for {ticker} - using $1.00")
-                current_price = 1.0
-                start_price = 1.0
-                end_price = 1.0
-
-            # Calculate position values
             df_ticker = df[df["Ticker"] == ticker]
             quantity = df_ticker["Quantity"].sum()
             portfolio_start_value += quantity * start_price
             portfolio_end_value += quantity * end_price
 
-            # Normalization logic
             if hist is not None and not hist.empty:
                 norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
                 if portfolio_normalized is None:
                     portfolio_normalized = norm_price * quantity
                 else:
                     portfolio_normalized += norm_price * quantity
-            elif benchmark_series:
-                # For money market funds or missing data, assume flat performance
-                flat_series = pd.Series([100] * len(benchmark_series[0])) * quantity
-                if portfolio_normalized is None:
-                    portfolio_normalized = flat_series
-                else:
-                    portfolio_normalized += flat_series
 
             price_data.append({
                 "Ticker": ticker, 
@@ -286,7 +249,7 @@ if uploaded_files:
             })
 
         except Exception as e:
-            st.warning(f"⚠️ Error processing {ticker}: {str(e)} - using $1.00")
+            st.warning(f"Error processing {ticker}: {str(e)}")
             price_data.append({
                 "Ticker": ticker, 
                 "Current Price": 1.0,
@@ -298,15 +261,11 @@ if uploaded_files:
     if portfolio_start_value > 0:
         portfolio_change = (portfolio_end_value / portfolio_start_value - 1) * 100
         if portfolio_normalized is not None and benchmark_series:
-            try:
-                portfolio_normalized = pd.DataFrame({
-                    "Date": benchmark_series[0]["Date"],
-                    "Normalized Price": portfolio_normalized / portfolio_start_value * 100,
-                    "Index": "My Portfolio"
-                })
-            except Exception as e:
-                st.warning(f"⚠️ Could not normalize portfolio data: {str(e)}")
-                portfolio_normalized = None
+            portfolio_normalized = pd.DataFrame({
+                "Date": benchmark_series[0]["Date"],
+                "Normalized Price": portfolio_normalized / portfolio_start_value * 100,
+                "Index": "My Portfolio"
+            })
 
     # Merge price data with holdings
     price_df = pd.DataFrame(price_data)
@@ -314,19 +273,8 @@ if uploaded_files:
     df["Market Value"] = df["Quantity"] * df["Current Price"]
     total_value = df["Market Value"].sum()
 
-    # Account filtering
-    if "Account" in df.columns:
-        accounts = df["Account"].dropna().unique().tolist()
-        selected_accounts = st.sidebar.multiselect(
-            "Filter Accounts", 
-            accounts, 
-            default=accounts,
-            help="Show only selected accounts"
-        )
-        df = df[df["Account"].isin(selected_accounts)]
-
     # Portfolio Insights
-    st.subheader("🔍 Portfolio Insights")
+    st.subheader("🧠 Portfolio Insights")
     insights = []
 
     # Overconcentration check
@@ -337,9 +285,7 @@ if uploaded_files:
         insights.append(f"⚠️ **{row['Ticker']}** is {pct:.1f}% of portfolio (over 10%)")
 
     # Cash drag check
-    cash_assets = df[df["Asset Class"].str.contains(
-        "Money Market|Cash", case=False, na=False
-    )]
+    cash_assets = df[df["Asset Class"].str.contains("Money Market|Cash", case=False, na=False)]
     cash_pct = cash_assets["Market Value"].sum() / total_value * 100
     if cash_pct > 15:
         insights.append(f"🪙 You have {cash_pct:.1f}% in cash/money markets (>15%)")
@@ -348,7 +294,7 @@ if uploaded_files:
     for _, row in df.iterrows():
         ticker = row["Ticker"]
         try:
-            if not is_money_market(ticker):  # Skip for money market funds
+            if not is_money_market(ticker):
                 hist = yf.Ticker(ticker).history(period=period)
                 if not hist.empty:
                     change = (hist["Close"].iloc[-1] / hist["Close"].iloc[0] - 1) * 100
@@ -359,12 +305,12 @@ if uploaded_files:
         except Exception:
             pass
 
-    # Earnings alerts (next 2 weeks)
+    # Earnings alerts
     earnings_tickers = set()
     for _, row in df.iterrows():
         ticker = row["Ticker"]
         try:
-            if not is_money_market(ticker):  # Skip for money market funds
+            if not is_money_market(ticker):
                 cal = yf.Ticker(ticker).calendar
                 if not cal.empty:
                     earnings_date = cal.loc["Earnings Date"].max()
@@ -372,55 +318,53 @@ if uploaded_files:
                         days = (earnings_date - pd.Timestamp.today()).days
                         if 0 <= days <= 14:
                             earnings_tickers.add(ticker)
-                            insights.append(
-                                f"📅 **{ticker}** earnings in {days} days "
-                                f"(~{earnings_date.strftime('%b %d')})"
-                            )
+                            insights.append(f"📅 **{ticker}** earnings in {days} days (~{earnings_date.strftime('%b %d')})")
         except Exception:
             pass
 
     if insights:
-        with st.expander("📌 Active Alerts", expanded=True):
-            for note in insights:
-                st.markdown(f"- {note}")
+        insight_order = {"⚠️": 1, "🪙": 2, "🔻": 3, "🚀": 4, "📅": 5}
+        insights.sort(key=lambda x: insight_order.get(x.split()[0], 6))
         
-        # Export insights
-        insights_text = "\n".join(insights)
-        st.download_button(
-            "💾 Download Insights", 
-            insights_text, 
-            file_name=f"portfolio_alerts_{datetime.date.today()}.txt"
-        )
+        with st.expander("📌 Active Alerts (Top 5)", expanded=True):
+            for note in insights[:5]:
+                st.markdown(f"- {note}")
+            
+            if len(insights) > 5:
+                with st.expander("See all alerts"):
+                    for note in insights[5:]:
+                        st.markdown(f"- {note}")
+            
+            insights_text = "\n".join(insights)
+            st.download_button(
+                "💾 Download Insights", 
+                insights_text, 
+                file_name=f"portfolio_alerts_{datetime.date.today()}.txt"
+            )
     else:
-        st.success("🎉 No alerts - your portfolio looks healthy!")
+        st.success("🎉 No alerts - portfolio looks healthy!")
     
     st.markdown("---")
 
     # Performance Summary
     st.subheader("📈 Performance Metrics")
-    
-    # Create metrics in a modern layout
     cols = st.columns(len(COMPARISON_TICKERS) + 1)
-    metrics = [("My Portfolio", portfolio_change)] + [
-        (label, benchmark_data.get(label)) 
-        for label in COMPARISON_TICKERS
-    ]
+    metrics = [("My Portfolio", portfolio_change)] + [(label, benchmark_data.get(label)) for label in COMPARISON_TICKERS]
     
     for i, (label, value) in enumerate(metrics):
         with cols[i]:
             if value is not None:
-                color = "green" if value >= 0 else "red"
-                arrow = "↑" if value >= 0 else "↓"
+                delta_arrow = "↑" if value >= 0 else "↓"
+                delta_color = "normal"
+                if value == 0: 
+                    delta_arrow = "-"
+                    delta_color = "off"
                 st.metric(
                     label,
-                    f"{abs(value):.2f}%",
-                    delta=f"{arrow} {abs(value):.2f}%",
-                    delta_color="normal",
+                    f"{value:.2f}%",
+                    delta=delta_arrow,
+                    delta_color=delta_color,
                     help=f"{label} {selected_period} performance"
-                )
-                st.markdown(
-                    f"<style>div[data-testid='stMetricDelta'] svg {{color: {color};}}</style>",
-                    unsafe_allow_html=True
                 )
             else:
                 st.metric(label, "N/A")
@@ -429,51 +373,64 @@ if uploaded_files:
 
     # Performance Chart
     if benchmark_series:
+        selected_tickers = st.multiselect(
+            "Add holdings to chart:", 
+            options=df['Ticker'].unique(),
+            default=[],
+            help="Compare individual holdings against benchmarks"
+        )
+        
+        # Add selected holdings to chart
+        for ticker in selected_tickers:
+            try:
+                if is_money_market(ticker):
+                    hist = pd.DataFrame({'Close': [1.0]*len(benchmark_series[0])})
+                else:
+                    stock = yf.Ticker(ticker)
+                    hist = stock.history(period=period)
+                
+                if not hist.empty:
+                    norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
+                    benchmark_series.append(pd.DataFrame({
+                        "Date": hist.index,
+                        "Normalized Price": norm_price,
+                        "Index": ticker
+                    }))
+            except Exception as e:
+                st.warning(f"Error processing {ticker}: {str(e)}")
+
         try:
             all_series = pd.concat(benchmark_series)
             if portfolio_normalized is not None:
-                # Align dates
-                min_date = min(
-                    all_series["Date"].min(),
-                    portfolio_normalized["Date"].min()
-                )
-                max_date = max(
-                    all_series["Date"].max(),
-                    portfolio_normalized["Date"].max()
-                )
-                
-                all_series = all_series[
-                    (all_series["Date"] >= min_date) & 
-                    (all_series["Date"] <= max_date)
-                ]
-                portfolio_normalized = portfolio_normalized[
-                    (portfolio_normalized["Date"] >= min_date) & 
-                    (portfolio_normalized["Date"] <= max_date)
-                ]
-                
                 all_series = pd.concat([all_series, portfolio_normalized])
             
             fig = px.line(
                 all_series, 
                 x="Date", 
                 y="Normalized Price", 
-                color="Index", 
-                title=f"Normalized Performance ({selected_period})",
+                color="Index",
+                title=f"Performance Comparison ({selected_period})",
                 template="plotly_white",
                 height=500
             )
             fig.update_layout(
+                title={
+                    'text': f"Performance Comparison ({selected_period})",
+                    'y':0.95,
+                    'x':0.5,
+                    'xanchor': 'center',
+                    'yanchor': 'top',
+                    'font': dict(size=20)
+                },
                 hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02)
             )
             st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
-            st.error(f"⚠️ Could not generate performance chart: {str(e)}")
+            st.error(f"Error generating chart: {str(e)}")
     
     # Portfolio Overview
     st.subheader("📊 Portfolio Composition")
-    
-    # Summary metrics
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Total Value", f"${total_value:,.2f}")
@@ -484,57 +441,44 @@ if uploaded_files:
 
     # Visualizations
     viz_cols = st.columns([1.2, 1.2, 1])
-    
     with viz_cols[0]:
         sector_group = df.groupby("Sector")["Market Value"].sum().reset_index()
-        fig_sector = px.pie(
-            sector_group, 
-            values="Market Value", 
-            names="Sector", 
-            title="By Sector",
-            hole=0.3
-        )
+        fig_sector = px.pie(sector_group, values="Market Value", names="Sector", title="By Sector", hole=0.3)
         st.plotly_chart(fig_sector, use_container_width=True)
 
     with viz_cols[1]:
         asset_group = df.groupby("Asset Class")["Market Value"].sum().reset_index()
-        if len(asset_group) > 1:  # Only show if we have multiple asset classes
-            fig_asset = px.pie(
-                asset_group, 
-                values="Market Value", 
-                names="Asset Class", 
-                title="By Asset Class",
-                hole=0.3
-            )
+        if len(asset_group) > 1:
+            fig_asset = px.pie(asset_group, values="Market Value", names="Asset Class", title="By Asset Class", hole=0.3)
             st.plotly_chart(fig_asset, use_container_width=True)
         else:
-            st.info("Add 'Asset Class' column for breakdown")
+            st.info("Add diverse assets for breakdown")
 
     with viz_cols[2]:
         if "Account" in df.columns and df["Account"].nunique() > 1:
             account_group = df.groupby("Account")["Market Value"].sum().reset_index()
-            fig_account = px.pie(
-                account_group, 
-                values="Market Value", 
-                names="Account", 
-                title="By Account",
-                hole=0.3
-            )
+            fig_account = px.pie(account_group, values="Market Value", names="Account", title="By Account", hole=0.3)
             st.plotly_chart(fig_account, use_container_width=True)
         else:
-            st.info("Add multiple accounts for breakdown")
+            st.info("Multiple accounts needed for breakdown")
 
-    # Raw data
+    # Raw data export
     with st.expander("🔍 View Raw Portfolio Data", expanded=False):
         st.dataframe(df.sort_values("Market Value", ascending=False))
+        csv = df.to_csv(index=False)
+        st.download_button(
+            "📥 Download Raw Data",
+            data=csv,
+            file_name=f"portfolio_data_{datetime.date.today()}.csv",
+            mime="text/csv"
+        )
 
 else:
     st.info("📤 Upload portfolio files to begin analysis")
     st.markdown("""
-    ### Expected file format:
-    - CSV or Excel format
-    - Must contain columns: `Ticker` and `Quantity`
-    - Optional columns: `Account`, `Asset Class`
-    
-    💡 *Tip: You can upload multiple files from different accounts*
+    ### Expected format:
+    - CSV/Excel with columns:  
+      - **Ticker** (required)  
+      - **Quantity** (required)  
+      - **Account** (optional)
     """)
