@@ -45,7 +45,7 @@ def is_money_market(ticker):
     return ticker in MONEY_MARKET_TICKERS or "XX" in ticker
 
 def fetch_market_data(symbol, period):
-    """Fetch market data with timezone normalization"""
+    """Fetch market data with error handling"""
     try:
         ticker = yf.Ticker(symbol)
         if period == "1d":
@@ -53,10 +53,10 @@ def fetch_market_data(symbol, period):
             hist = hist.between_time('09:30', '16:00')
         else:
             hist = ticker.history(period=period)
-        # Remove timezone information
+        
         if hist.index.tz is not None:
             hist.index = hist.index.tz_convert(None)
-        # Rest of the function remains the same
+        
         if not hist.empty:
             norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
             return {
@@ -115,22 +115,20 @@ def main():
     selected_period = render_sidebar()
     period = PERIOD_MAP[selected_period]
 
-    # Initialize core data structures
     benchmark_series = []
     benchmark_data = {}
     portfolio_change = None
-    portfolio_normalized = None
     df = pd.DataFrame()
     total_value = 0
 
-    # Fetch benchmark data (always)
+    # Fetch benchmark data
     for label, symbol in COMPARISON_TICKERS.items():
         result = fetch_market_data(symbol, period)
         if result:
             benchmark_series.append(result["data"])
             benchmark_data[label] = result["pct_change"]
 
-    # File upload and portfolio processing
+    # File upload handling
     uploaded_files = st.file_uploader(
         "Upload portfolio holdings (CSV/Excel)", 
         type=["csv", "xlsx"], 
@@ -149,7 +147,6 @@ def main():
                 file_df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
                 cleaned_df = clean_portfolio(file_df)
                 
-                # Check duplicates
                 if 'Ticker' in cleaned_df.columns:
                     dup = set(cleaned_df['Ticker']).intersection(tickers_seen)
                     duplicate_tickers.update(dup)
@@ -196,12 +193,10 @@ def main():
                         sector = info.get("sector", "Unknown")
                         asset_class = info.get("quoteType", "Stock").title()
 
-                    # Calculate position values
                     qty = df[df["Ticker"] == ticker]["Quantity"].sum()
                     portfolio_start_value += qty * (start_price if period != "1d" else open_price)
                     portfolio_end_value += qty * end_price
 
-                    # Store price data
                     price_data.append({
                         "Ticker": ticker, 
                         "Current Price": end_price,
@@ -213,7 +208,7 @@ def main():
                     st.warning(f"Skipping {ticker}: {str(e)}")
                     continue
 
-            # Calculate portfolio performance
+            # Calculate performance
             if portfolio_start_value > 0:
                 portfolio_change = (portfolio_end_value / portfolio_start_value - 1) * 100
 
@@ -223,11 +218,11 @@ def main():
             df["Market Value"] = df["Quantity"] * df["Current Price"]
             total_value = df["Market Value"].sum()
 
-            # Generate normalized portfolio series
-            if total_value > 0 and not benchmark_series.empty:
+            # Add portfolio to benchmarks
+            if total_value > 0 and len(benchmark_series) > 0:
                 portfolio_normalized = pd.DataFrame({
                     "Date": benchmark_series[0]["Date"],
-                    "Normalized Price": (df["Market Value"].sum() / total_value * 100),
+                    "Normalized Price": (total_value / portfolio_start_value * 100),
                     "Index": "My Portfolio"
                 })
                 benchmark_series.append(portfolio_normalized)
@@ -381,69 +376,69 @@ def main():
                     mime="text/csv"
                 )
 
+            # ==============================================
+            # Performance Visualization (now inside upload block)
+            # ==============================================
+            if benchmark_series:
+                try:
+                    # Create unified timeline
+                    if period == "1d":
+                        market_hours = pd.date_range(
+                            start=pd.Timestamp.today().tz_localize(None).normalize() + pd.Timedelta(hours=9, minutes=30),
+                            end=pd.Timestamp.today().tz_localize(None).normalize() + pd.Timedelta(hours=16),
+                            freq='5T'
+                        )
+                        
+                        aligned_data = []
+                        for series in benchmark_series:
+                            s = series.set_index('Date').reindex(market_hours, method='ffill')
+                            aligned_data.append(s.reset_index().rename(columns={'index':'Date'}))
+                        chart_data = pd.concat(aligned_data)
+                    else:
+                        chart_data = pd.concat(benchmark_series)
+
+                    # Create interactive chart
+                    fig = px.line(
+                        chart_data, 
+                        x="Date", 
+                        y="Normalized Price", 
+                        color="Index",
+                        title=f"{'Intraday' if period == '1d' else 'Historical'} Performance Comparison",
+                        template="plotly_white",
+                        height=500
+                    ).update_layout(
+                        xaxis_title="Market Hours" if period == "1d" else "Date",
+                        hovermode="x unified",
+                        legend=dict(
+                            orientation="h",
+                            yanchor="bottom",
+                            y=1.02,
+                            title_text="Performance Entities"
+                        )
+                    )
+
+                    if period == "1d":
+                        fig.update_xaxes(
+                            tickformat="%H:%M",
+                            tickvals=pd.date_range(
+                                start=market_hours[0], 
+                                end=market_hours[-1], 
+                                freq='1H'
+                            ),
+                            range=[market_hours[0], market_hours[-1]]
+                        )
+
+                    st.plotly_chart(fig, use_container_width=True)
+
+                except Exception as e:
+                    st.error(f"Chart rendering error: {str(e)}")
+
         except Exception as e:
             st.error(f"Critical error: {str(e)}")
             st.stop()
-
-    # ==============================================
-    # Performance Visualization
-    # ==============================================
-    if benchmark_series:
-        try:
-            # Create unified timeline
-            if period == "1d":
-                market_hours = pd.date_range(
-                    start=pd.Timestamp.today().tz_localize(None).normalize() + pd.Timedelta(hours=9, minutes=30),
-                    end=pd.Timestamp.today().tz_localize(None).normalize() + pd.Timedelta(hours=16),
-                    freq='5T'
-                )
-                
-                aligned_data = []
-                for series in benchmark_series:
-                    s = series.set_index('Date').reindex(market_hours, method='ffill')
-                    aligned_data.append(s.reset_index().rename(columns={'index':'Date'}))
-                chart_data = pd.concat(aligned_data)
-            else:
-                chart_data = pd.concat(benchmark_series)
-
-            # Create interactive chart
-            fig = px.line(
-                chart_data, 
-                x="Date", 
-                y="Normalized Price", 
-                color="Index",
-                title=f"{'Intraday' if period == '1d' else 'Historical'} Performance Comparison",
-                template="plotly_white",
-                height=500
-            ).update_layout(
-                xaxis_title="Market Hours" if period == "1d" else "Date",
-                hovermode="x unified",
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    title_text="Performance Entities"
-                )
-            )
-
-            if period == "1d":
-                fig.update_xaxes(
-                    tickformat="%H:%M",
-                    tickvals=pd.date_range(
-                        start=market_hours[0], 
-                        end=market_hours[-1], 
-                        freq='1H'
-                    ),
-                    range=[market_hours[0], market_hours[-1]]
-                )
-
-            st.plotly_chart(fig, use_container_width=True)
-
-        except Exception as e:
-            st.error(f"Chart rendering error: {str(e)}")
 
     else:
         st.info("📤 Upload portfolio files to begin analysis")
 
 if __name__ == "__main__":
-    main()
+    main()    
