@@ -338,72 +338,73 @@ def main():
             # ==============================================
             # Performance Visualization
             # ==============================================
-            st.subheader("📉 Intraday Performance Comparison" if period == "1d" else "📊 Historical Performance")
+            st.subheader("📉 Intraday Performance Comparison" if period == "1d" else "📊 Historical Performance")if benchmark_series:
             if benchmark_series:
-                try:
-                    # Remove duplicate indices across all series
-                    clean_series = []
-                    for series in benchmark_series:
-                        # Deduplicate within each series
-                        deduped = series.drop_duplicates(subset=['Date'], keep='last')
-                        clean_series.append(deduped)
-                    
-                    # Create unified timeline
-                    if period == "1d":
-                        market_hours = pd.date_range(
-                            start=pd.Timestamp.today().tz_localize(None).normalize() + pd.Timedelta(hours=9, minutes=30),
-                            end=pd.Timestamp.today().tz_localize(None).normalize() + pd.Timedelta(hours=16),
-                            freq='5T'
-                        )
+                 try:
+                        # Remove duplicate indices and sort
+                        clean_series = []
+                        for series in benchmark_series:
+                            # Ensure chronological order
+                            deduped = series.sort_values('Date').drop_duplicates(subset=['Date'], keep='last')
+                            clean_series.append(deduped)
                         
-                        aligned_data = []
-                        for series in clean_series:
-                            # Use forward fill for missing intervals
-                            s = series.set_index('Date').reindex(market_hours, method='ffill').reset_index()
-                            aligned_data.append(s.rename(columns={'index':'Date'}))
-                        
-                        chart_data = pd.concat(aligned_data)
-                    else:
-                        chart_data = pd.concat(clean_series)
-            
-                    # Create interactive chart
-                    fig = px.line(
-                        chart_data.dropna(), 
-                        x="Date", 
-                        y="Normalized Price", 
-                        color="Index",
-                        title="",
-                        template="plotly_white",
-                        height=500
-                    ).update_layout(
-                        xaxis_title="Market Hours" if period == "1d" else "Date",
-                        hovermode="x unified",
-                        legend_title_text="Benchmarks",
-                        legend=dict(
-                            orientation="h",
-                            yanchor="bottom",
-                            y=1.02,
-                            xanchor="right",
-                            x=1
-                        ),
-                        yaxis_title="Normalized Performance (%)"
-                    )
-            
-                    if period == "1d":
-                        fig.update_xaxes(
-                            tickformat="%H:%M",
-                            tickvals=pd.date_range(
-                                start=market_hours[0], 
-                                end=market_hours[-1], 
-                                freq='1H'
+                        # Create unified timeline
+                        if period == "1d":
+                            market_hours = pd.date_range(
+                                start=pd.Timestamp.today().tz_localize(None).normalize() + pd.Timedelta(hours=9, minutes=30),
+                                end=pd.Timestamp.today().tz_localize(None).normalize() + pd.Timedelta(hours=16),
+                                freq='5T'
+                            )
+                            
+                            aligned_data = []
+                            for series in clean_series:
+                                # Sort before processing
+                                sorted_series = series.sort_values('Date')
+                                s = sorted_series.set_index('Date').reindex(market_hours, method='ffill').reset_index()
+                                aligned_data.append(s.rename(columns={'index':'Date'}))
+                            
+                            chart_data = pd.concat(aligned_data).sort_values('Date')  # Final sort
+                        else:
+                            chart_data = pd.concat(clean_series).sort_values('Date')  # Sort combined data
+                
+                        # Create interactive chart
+                        fig = px.line(
+                            chart_data.dropna(), 
+                            x="Date", 
+                            y="Normalized Price", 
+                            color="Index",
+                            title="",
+                            template="plotly_white",
+                            height=500
+                        ).update_layout(
+                            xaxis_title="Market Hours" if period == "1d" else "Date",
+                            hovermode="x unified",
+                            legend_title_text="Benchmarks",
+                            legend=dict(
+                                orientation="h",
+                                yanchor="bottom",
+                                y=1.02,
+                                xanchor="right",
+                                x=1
                             ),
-                            range=[market_hours[0], market_hours[-1]]
+                            yaxis_title="Normalized Performance (%)"
                         )
-            
-                    st.plotly_chart(fig, use_container_width=True)
-            
-                except Exception as e:
-                    st.error(f"Chart rendering error: {str(e)}")
+                
+                        if period == "1d":
+                            fig.update_xaxes(
+                                tickformat="%H:%M",
+                                tickvals=pd.date_range(
+                                    start=market_hours[0], 
+                                    end=market_hours[-1], 
+                                    freq='1H'
+                                ),
+                                range=[market_hours[0], market_hours[-1]]
+                            )
+                
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                    except Exception as e:
+                        st.error(f"Chart rendering error: {str(e)}")
 
             st.markdown("---")
 
