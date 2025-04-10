@@ -4,8 +4,7 @@ import yfinance as yf
 import plotly.express as px
 import plotly.graph_objects as go
 import datetime
-
-# Set page config
+# ── App Configuration ──
 st.set_page_config(page_title="Portfolio Tracker", layout="wide")
 
 # Version header with tooltip
@@ -13,10 +12,10 @@ st.title("📈 Portfolio Tracker Dashboard")
 st.caption("Version 1.0.0.2")
 
 
-# File uploader placed at the top
+# ── Upload Holdings ──
 uploaded_files = st.file_uploader("Upload your holdings CSV or Excel file", type=["csv", "xlsx"], accept_multiple_files=True)
 
-# Sidebar Filters
+# ── Sidebar Filters ──
 with st.sidebar.expander("🔧 Filters", expanded=True):
     period_map = {
         "Today": "1d",
@@ -28,27 +27,8 @@ with st.sidebar.expander("🔧 Filters", expanded=True):
         "1Y": "1y",
         "5Y": "5y"
     }
-    selected_period = st.selectbox("Select time range", list(period_map.keys()), index=0)
-
-    if uploaded_files:
-        try:
-            if "Account" in df.columns:
-                accounts = df["Account"].dropna().unique().tolist()
-                selected_accounts = st.multiselect("📁 Filter by account(s):", accounts, default=accounts)
-                df = df[df["Account"].isin(selected_accounts)]
-        except Exception:
-            pass
-
-    if uploaded_files:
-        if "Account" in df.columns:
-            accounts = df["Account"].dropna().unique().tolist()
-            selected_accounts = st.multiselect("Filter by account(s):", accounts, default=accounts)
-            df = df[df["Account"].isin(selected_accounts)]
-
-    
-
-
-
+    selected_period = st.selectbox("Select time range", list(period_map.keys()), index=0)  
+   
 comparison_tickers = {
     "S&P 500": "^GSPC",
     "Nasdaq 100": "^NDX",
@@ -229,16 +209,16 @@ if uploaded_files:
 else:
     st.info("Upload at least one CSV or Excel portfolio file to get started.")
 
-    # Sidebar version history (placed at the bottom)
+    # ── Version History ──
     st.sidebar.markdown("""
-    ---
-    **📦 Version History**
-    - **v1.0.0.2**
-      - Open-to-current price logic
-      - Benchmark overlay fix
-      - Normalization cleanup
-    - **v1.0.0.1**
-      - Summary grid
-      - ETF/Mutual/Crypto fallback
-      - Duplicate file detection
-    """)
+---
+**📦 Version History**
+- **v1.0.0.2**
+  - Open-to-current price logic
+  - Benchmark overlay fix
+  - Normalization cleanup
+- **v1.0.0.1**
+  - Summary grid
+  - ETF/Mutual/Crypto fallback
+  - Duplicate file detection
+""")
