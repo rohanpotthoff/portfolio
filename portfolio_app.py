@@ -10,11 +10,19 @@ st.set_page_config(page_title="Portfolio Tracker", layout="wide")
 
 with st.sidebar.expander("📦 Version History", expanded=False):
     st.markdown("""
+- **v1.0.0.3**
+  - Portfolio insights section with overconcentration, cash drag, big movers, earnings alerts
+  - Hover tooltips for earnings
+  - Insights export to TXT
+  - Fixed string literal bug
 - **v1.0.0.2**
-  - Open-to-current price logic
-  - Benchmark overlay fix
-  - Normalization cleanup
+  - Summary grid
+  - ETF/Mutual/Crypto fallback
+  - Duplicate file detection
 - **v1.0.0.1**
+  - Initial stable version with performance summary
+  - Benchmark normalization
+  - Sector and asset class breakdowns
   - Summary grid
   - ETF/Mutual/Crypto fallback
   - Duplicate file detection
@@ -22,7 +30,7 @@ with st.sidebar.expander("📦 Version History", expanded=False):
 
 # Version header with tooltip
 st.title("📈 Portfolio Tracker Dashboard")
-st.caption("Version 1.0.0.2")
+st.caption("Version 1.0.0.3")
 
 
 # ── Upload Holdings ──
@@ -252,8 +260,6 @@ if uploaded_files:
             st.download_button("📥 Download Insights Report", insights_text, file_name="portfolio_insights.txt")
         else:
             st.success("No alerts. Portfolio looks healthy.")
-            for note in insights:
-                st.markdown(f"- {note}")
         else:
             st.success("No alerts. Portfolio looks healthy.")
         metric_cols = st.columns(2)
