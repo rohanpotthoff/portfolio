@@ -258,7 +258,7 @@ if uploaded_files:
 
             # Export insights to download
             import io
-            insights_buffer = io.StringIO(os.linesep.join(insights))
+            insights_buffer = io.BytesIO(os.linesep.join(insights).encode("utf-8"))
             st.download_button("📥 Download Insights Report", insights_buffer, file_name="portfolio_insights.txt", mime="text/plain")
 
             # ── Performance Grid ──
