@@ -19,16 +19,25 @@ uploaded_files = st.file_uploader("Upload your holdings CSV or Excel file", type
 # Sidebar Filters
 with st.sidebar.expander("🔧 Filters", expanded=True):
     period_map = {
-    "Today": "1d",
-    "1W": "7d",
-    "1M": "1mo",
-    "3M": "3mo",
-    "6M": "6mo",
-    "YTD": "ytd",
-    "1Y": "1y",
-    "5Y": "5y"
-}
-        selected_period = st.selectbox("Select time range", list(period_map.keys()), index=0)
+        "Today": "1d",
+        "1W": "7d",
+        "1M": "1mo",
+        "3M": "3mo",
+        "6M": "6mo",
+        "YTD": "ytd",
+        "1Y": "1y",
+        "5Y": "5y"
+    }
+    selected_period = st.selectbox("Select time range", list(period_map.keys()), index=0)
+
+    if uploaded_files:
+        try:
+            if "Account" in df.columns:
+                accounts = df["Account"].dropna().unique().tolist()
+                selected_accounts = st.multiselect("📁 Filter by account(s):", accounts, default=accounts)
+                df = df[df["Account"].isin(selected_accounts)]
+        except Exception:
+            pass
 
     if uploaded_files:
         if "Account" in df.columns:
