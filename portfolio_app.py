@@ -4,6 +4,7 @@ import yfinance as yf
 import plotly.express as px
 import plotly.graph_objects as go
 import datetime
+import os
 # ── App Configuration ──
 st.set_page_config(page_title="Portfolio Tracker", layout="wide")
 
@@ -53,6 +54,19 @@ def clean_portfolio(df):
     df['Ticker'] = df['Ticker'].str.replace("CUR:GE", "GE")
     return df
 
+# ── Auto-Save Snapshot for Historical Tracking ──
+today = datetime.date.today().isoformat()
+snapshot_path = "portfolio_history.csv"
+
+def save_daily_snapshot(df):
+    df["Date"] = today
+    if os.path.exists(snapshot_path):
+        prev = pd.read_csv(snapshot_path)
+        combined = pd.concat([prev, df], ignore_index=True)
+    else:
+        combined = df
+    combined.to_csv(snapshot_path, index=False)
+
 if uploaded_files:
     dataframes = []
     tickers_seen = set()
@@ -73,6 +87,7 @@ if uploaded_files:
             st.warning(f"The following tickers appear in multiple uploaded files: {', '.join(duplicate_tickers)}")
 
     df = pd.concat(dataframes, ignore_index=True)
+save_daily_snapshot(df.copy())
     df.columns = [col.strip().capitalize() for col in df.columns]
     required_columns = ["Ticker", "Quantity"]
 
