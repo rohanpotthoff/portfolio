@@ -87,7 +87,7 @@ if uploaded_files:
             st.warning(f"The following tickers appear in multiple uploaded files: {', '.join(duplicate_tickers)}")
 
     df = pd.concat(dataframes, ignore_index=True)
-save_daily_snapshot(df.copy())
+    save_daily_snapshot(df.copy())
     df.columns = [col.strip().capitalize() for col in df.columns]
     required_columns = ["Ticker", "Quantity"]
 
@@ -235,3 +235,4 @@ save_daily_snapshot(df.copy())
                 st.plotly_chart(fig_account, use_container_width=True)
 else:
     st.info("Upload at least one CSV or Excel portfolio file to get started.")
+    
