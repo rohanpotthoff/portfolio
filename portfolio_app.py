@@ -222,13 +222,41 @@ if uploaded_files:
             })
 
     # Calculate portfolio performance
-    if portfolio_start_value > 0 and portfolio_normalized is not None:
+if portfolio_start_value > 0 and portfolio_normalized is not None:
+    try:
         portfolio_change = (portfolio_end_value / portfolio_start_value - 1) * 100
-        portfolio_normalized = pd.DataFrame({
-            "Date": hist.index,
-            "Normalized Price": portfolio_normalized / portfolio_start_value * 100,
-            "Index": "My Portfolio"
-        })
+        normalized_values = portfolio_normalized / portfolio_start_value * 100
+        
+        # Ensure we have matching lengths
+        if len(hist.index) == len(normalized_values):
+            portfolio_normalized = pd.DataFrame({
+                "Date": hist.index,
+                "Normalized Price": normalized_values,
+                "Index": "My Portfolio"
+            })
+        else:
+            # If lengths don't match, align with benchmark data
+            if benchmark_series:
+                benchmark_dates = benchmark_series[0]["Date"]
+                if len(benchmark_dates) == len(normalized_values):
+                    portfolio_normalized = pd.DataFrame({
+                        "Date": benchmark_dates,
+                        "Normalized Price": normalized_values,
+                        "Index": "My Portfolio"
+                    })
+                else:
+                    # Fallback to simple range if alignment fails
+                    portfolio_normalized = pd.DataFrame({
+                        "Date": pd.date_range(end=pd.Timestamp.today(), periods=len(normalized_values)),
+                        "Normalized Price": normalized_values,
+                        "Index": "My Portfolio"
+                    })
+            else:
+                portfolio_normalized = None
+                st.warning("Could not align portfolio data with benchmarks")
+    except Exception as e:
+        st.error(f"Error normalizing portfolio data: {str(e)}")
+        portfolio_normalized = None
 
     # Merge price data with holdings
     price_df = pd.DataFrame(price_data)
