@@ -7,6 +7,18 @@ import datetime
 # ── App Configuration ──
 st.set_page_config(page_title="Portfolio Tracker", layout="wide")
 
+with st.sidebar.expander("📦 Version History", expanded=False):
+    st.markdown("""
+- **v1.0.0.2**
+  - Open-to-current price logic
+  - Benchmark overlay fix
+  - Normalization cleanup
+- **v1.0.0.1**
+  - Summary grid
+  - ETF/Mutual/Crypto fallback
+  - Duplicate file detection
+    """)
+
 # Version header with tooltip
 st.title("📈 Portfolio Tracker Dashboard")
 st.caption("Version 1.0.0.2")
@@ -208,17 +220,3 @@ if uploaded_files:
                 st.plotly_chart(fig_account, use_container_width=True)
 else:
     st.info("Upload at least one CSV or Excel portfolio file to get started.")
-
-    # ── Version History ──
-    st.sidebar.markdown("""
----
-**📦 Version History**
-- **v1.0.0.2**
-  - Open-to-current price logic
-  - Benchmark overlay fix
-  - Normalization cleanup
-- **v1.0.0.1**
-  - Summary grid
-  - ETF/Mutual/Crypto fallback
-  - Duplicate file detection
-""")
