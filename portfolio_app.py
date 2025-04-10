@@ -279,9 +279,7 @@ if uploaded_files:
             for i, (label, change) in enumerate(perf_data):
                 color = "green" if change and change > 0 else "red" if change and change < 0 else "gray"
                 icon = "⬆️" if change and change > 0 else "⬇️" if change and change < 0 else "➖"
-                cols[i].markdown(f"**{label}**
-
-<span style='color:{color}; font-size: 24px;'>{icon} {change:.2f}%</span>", unsafe_allow_html=True)
+                cols[i].markdown(f"**{label}**<br><span style='color:{color}; font-size: 24px;'>{icon} {change:.2f}%</span>", unsafe_allow_html=True)
 
             # Removed summary table section
             st.subheader("📊 Performance Summary Table")
