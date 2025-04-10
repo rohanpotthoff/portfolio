@@ -47,23 +47,22 @@ def get_market_times():
         market_close = last_friday.replace(hour=16, minute=0)
     # Handle after hours
     elif now > market_close:
-        market_open = market_open + datetime.timedelta(days=1)
-        market_close = market_close + datetime.timedelta(days=1)
-        
+        market_open += datetime.timedelta(days=1)
+        market_close += datetime.timedelta(days=1)
     return market_open, market_close
 
 @lru_cache(maxsize=128)
 def fetch_market_data(label, symbol, period):
-    """Fetch market data with proper column handling"""
+    """Fetch market data with robust error handling"""
     try:
-        # Handle cryptocurrency 24/7 trading
         is_crypto = any(x in symbol for x in ["-USD", "-EUR"])
-        
+        hist = pd.DataFrame()
+
         if period == "1d" and not is_crypto:
             market_open, market_close = get_market_times()
             ticker = yf.Ticker(symbol)
             
-            # Handle European indices
+            # European market adjustment
             if "^STOXX50E" in symbol:
                 hist = ticker.history(
                     start=market_open - datetime.timedelta(hours=6),
@@ -71,7 +70,8 @@ def fetch_market_data(label, symbol, period):
                     interval="5m",
                     prepost=False
                 )
-                hist.index = hist.index.tz_convert("Europe/Berlin").tz_localize(None)
+                if not hist.empty:
+                    hist.index = hist.index.tz_convert("Europe/Berlin").tz_localize(None)
             else:
                 hist = ticker.history(
                     start=market_open,
@@ -79,23 +79,27 @@ def fetch_market_data(label, symbol, period):
                     interval="5m",
                     prepost=False
                 )
-                hist.index = hist.index.tz_localize(None)
+                if not hist.empty:
+                    hist.index = hist.index.tz_localize(None)
         else:
             ticker = yf.Ticker(symbol)
             hist = ticker.history(period=period)
             if not hist.empty and hist.index.tz is not None:
                 hist.index = hist.index.tz_convert(None)
 
-        # Standardize column names
+        if hist.empty:
+            return None
+
+        # Standardize columns and reset index
         hist = hist.reset_index().rename(columns={
             'index': 'Date',
             'Datetime': 'Date'
         })
-        
-        if hist.empty or len(hist) < 2:
+
+        if 'Close' not in hist.columns:
             return None
-            
-        # Calculate percentage change
+
+        # Calculate normalized performance
         base_price = hist["Close"].iloc[0]
         hist["Normalized"] = (hist["Close"] / base_price - 1) * 100
         
@@ -125,7 +129,7 @@ def is_money_market(ticker):
 # ==============================================
 def render_header():
     st.title("📊 Portfolio Tracker")
-    st.caption("Version 4.3 | Created by Rohan Potthoff")
+    st.caption("Version 4.4 | Created by Rohan Potthoff")
     st.markdown("""
     <style>
     .social-icons { display: flex; gap: 15px; margin-top: -10px; margin-bottom: 10px; }
@@ -142,8 +146,8 @@ def render_header():
 def render_sidebar():
     with st.sidebar.expander("📦 Version History", expanded=False):
         st.markdown("""
-        - **v4.3**: Fixed column handling, crypto support, timezone issues
-        - **v4.2**: Enhanced error handling and data validation
+        - **v4.4**: Comprehensive error handling, crypto support, stability fixes
+        - **v4.3**: Timezone corrections and performance optimizations
         """)
     
     with st.sidebar.expander("🔧 Filters & Settings", expanded=True):
@@ -152,7 +156,7 @@ def render_sidebar():
             list(PERIOD_MAP.keys()), 
             index=0
         )
-        st.caption("Tip: Money market funds valued at $1.00")
+        st.caption("Money market funds valued at $1.00 | Crypto supported")
     return selected_period
 
 # ==============================================
@@ -191,11 +195,9 @@ def main():
                 file_df = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
                 cleaned_df = clean_portfolio(file_df)
                 
-                # Check for duplicates
                 new_dupes = set(cleaned_df.Ticker) & seen_tickers
                 duplicates.update(new_dupes)
                 seen_tickers.update(cleaned_df.Ticker)
-                
                 df_list.append(cleaned_df)
             
             df = pd.concat(df_list, ignore_index=True)
@@ -226,23 +228,28 @@ def main():
 
                     result = fetch_market_data(ticker, ticker, period)
                     if not result:
-                        raise ValueError(f"No data found for {ticker}")
+                        raise ValueError(f"No data for {ticker}")
                         
                     hist = result["data"]
+                    if hist.empty:
+                        raise ValueError(f"Empty data for {ticker}")
+                        
                     qty = df[df.Ticker == ticker].Quantity.sum()
-                    
-                    # Calculate values
-                    start_price = hist.Close.iloc[0] if "Close" in hist else 1.0
-                    current_price = hist.Close.iloc[-1] if "Close" in hist else 1.0
+                    start_price = hist.Close.iloc[0] if 'Close' in hist else 1.0
+                    current_price = hist.Close.iloc[-1] if 'Close' in hist else 1.0
                     
                     portfolio_start_value += qty * start_price
                     portfolio_end_value += qty * current_price
 
                     # Store performance data
-                    if not hist.empty:
-                        if portfolio_history.empty:
-                            portfolio_history = hist[["Date"]].copy()
-                        portfolio_history[ticker] = hist["Normalized"]
+                    if not portfolio_history.empty:
+                        portfolio_history = portfolio_history.merge(
+                            hist[["Date", "Normalized"]], 
+                            on="Date", 
+                            how="outer"
+                        ).rename(columns={"Normalized": ticker})
+                    else:
+                        portfolio_history = hist[["Date", "Normalized"]].rename(columns={"Normalized": ticker})
 
                     # Get stock info
                     info = yf.Ticker(ticker).info
@@ -281,17 +288,17 @@ def main():
             # Performance Visualization
             if not portfolio_history.empty:
                 st.subheader("📊 Performance Comparison")
-                portfolio_norm = portfolio_history.mean(axis=1).to_frame(name="Normalized")
-                portfolio_norm["Date"] = portfolio_history["Date"]
+                portfolio_norm = portfolio_history.set_index('Date').mean(axis=1).reset_index()
+                portfolio_norm.columns = ["Date", "Normalized"]
                 portfolio_norm["Index"] = "My Portfolio"
 
-                # Combine benchmark data
-                if benchmark_series:
-                    bench_dfs = [pd.DataFrame(b["data"]).assign(Index=b["label"]) 
-                               for b in benchmark_series]
-                    combined = pd.concat([portfolio_norm] + bench_dfs)
-                else:
-                    combined = portfolio_norm
+                bench_dfs = []
+                for b in benchmark_series:
+                    bench_df = pd.DataFrame(b["data"])
+                    bench_df["Index"] = b["label"]
+                    bench_dfs.append(bench_df)
+                
+                combined = pd.concat([portfolio_norm] + bench_dfs)
 
                 fig = px.line(
                     combined,
@@ -325,7 +332,7 @@ def main():
                 # Merge price data
                 price_df = pd.DataFrame(price_data)
                 df = df.merge(price_df, on="Ticker")
-                df["Market Value"] = df.Quantity * df["Current Price"]
+                df["Market Value"] = df["Quantity"] * df["Current Price"]
                 df["Weight"] = df["Market Value"] / portfolio_end_value
 
                 # Concentration risk
@@ -334,7 +341,7 @@ def main():
                     insights.append(f"⚠️ **{row.Ticker}** ({row.Weight:.1%}) exceeds 10% allocation")
 
                 # Cash position
-                cash = df[df["Asset Class"] == "Money Market"].MarketValue.sum()
+                cash = df[df["Asset Class"] == "Money Market"]["Market Value"].sum()
                 cash_pct = cash / portfolio_end_value
                 if cash_pct > 0.15:
                     insights.append(f"🪙 Cash allocation ({cash_pct:.1%}) may create drag")
@@ -403,15 +410,15 @@ def main():
                 # Visualizations
                 viz_cols = st.columns(3)
                 with viz_cols[0]:
-                    sector_group = df.groupby("Sector", as_index=False).MarketValue.sum()
-                    fig = px.pie(sector_group, values="MarketValue", names="Sector", 
+                    sector_group = df.groupby("Sector", as_index=False)["Market Value"].sum()
+                    fig = px.pie(sector_group, values="Market Value", names="Sector", 
                                title="Sector Allocation", hole=0.3)
                     st.plotly_chart(fig, use_container_width=True)
 
                 with viz_cols[1]:
-                    asset_group = df.groupby("Asset Class", as_index=False).MarketValue.sum()
+                    asset_group = df.groupby("Asset Class", as_index=False)["Market Value"].sum()
                     if len(asset_group) > 1:
-                        fig = px.pie(asset_group, values="MarketValue", names="Asset Class", 
+                        fig = px.pie(asset_group, values="Market Value", names="Asset Class", 
                                    title="Asset Classes", hole=0.3)
                         st.plotly_chart(fig, use_container_width=True)
                     else:
@@ -419,8 +426,8 @@ def main():
 
                 with viz_cols[2]:
                     if "Account" in df and df.Account.nunique() > 1:
-                        account_group = df.groupby("Account", as_index=False).MarketValue.sum()
-                        fig = px.pie(account_group, values="MarketValue", names="Account", 
+                        account_group = df.groupby("Account", as_index=False)["Market Value"].sum()
+                        fig = px.pie(account_group, values="Market Value", names="Account", 
                                    title="Account Distribution", hole=0.3)
                         st.plotly_chart(fig, use_container_width=True)
                     else:
@@ -428,7 +435,7 @@ def main():
 
                 # Raw data export
                 with st.expander("🔍 Raw Portfolio Data"):
-                    st.dataframe(df.sort_values("MarketValue", ascending=False))
+                    st.dataframe(df.sort_values("Market Value", ascending=False))
                     csv = df.to_csv(index=False)
                     st.download_button(
                         "📥 Download CSV", 
