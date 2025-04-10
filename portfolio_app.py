@@ -260,8 +260,6 @@ if uploaded_files:
             st.download_button("📥 Download Insights Report", insights_text, file_name="portfolio_insights.txt")
         else:
             st.success("No alerts. Portfolio looks healthy.")
-        else:
-            st.success("No alerts. Portfolio looks healthy.")
         metric_cols = st.columns(2)
         perf_metrics = [
             ("📦 My Portfolio", portfolio_change),
