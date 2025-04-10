@@ -193,6 +193,69 @@ if uploaded_files:
             df = df[df["Account"].isin(selected_accounts)]
 
         st.subheader("🔁 Performance Summary")
+
+        # ── Insights & Alerts ──
+        st.subheader("🧠 Portfolio Insights")
+        insights = []
+
+        top_holdings = df.sort_values("Market Value", ascending=False)
+        total_value = df["Market Value"].sum()
+
+        # Overconcentration
+        overweights = top_holdings[top_holdings["Market Value"] / total_value > 0.10]
+        for _, row in overweights.iterrows():
+            pct = row["Market Value"] / total_value * 100
+            insights.append(f"⚠️ **{row['Ticker']}** is {pct:.1f}% of your portfolio.")
+
+        # High cash drag
+        if "Asset Class" in df.columns:
+            cash_assets = df[df["Asset Class"].str.contains("Money Market|Cash", case=False, na=False)]
+            cash_pct = cash_assets["Market Value"].sum() / total_value * 100
+            if cash_pct > 15:
+                insights.append(f"🪙 You have {cash_pct:.1f}% in cash or money market funds.")
+
+        # Sharp drops and big gains
+        for i, row in df.iterrows():
+            ticker = row["Ticker"]
+            try:
+                hist = yf.Ticker(ticker).history(period=period)
+                if not hist.empty:
+                    change = (hist["Close"].iloc[-1] / hist["Close"].iloc[0] - 1) * 100
+                    if change <= -10:
+                        insights.append(f"🔻 **{ticker}** dropped {change:.1f}% over selected period.")
+                    if change >= 10:
+                        insights.append(f"🚀 **{ticker}** gained {change:.1f}% over selected period.")
+            except: pass
+
+        # Upcoming earnings
+        for i, row in df.iterrows():
+            ticker = row["Ticker"]
+            try:
+                cal = yf.Ticker(ticker).calendar
+                if not cal.empty:
+                    earnings_date = cal.loc["Earnings Date"].max()
+                    if pd.notna(earnings_date):
+                        days = (earnings_date - pd.Timestamp.today()).days
+                        if 0 <= days <= 14:
+                            insights.append(f"📅 <span title='Earnings Date: {earnings_date.date()}'>**{ticker}** reports earnings in {days} days.</span>")
+            except: pass
+
+        if insights:
+            insights.sort()
+            with st.expander("View insights", expanded=True):
+                for note in insights:
+                    st.markdown(f"- {note}")
+
+            # Export insights to download
+            insights_text = "
+".join(insights)
+            st.download_button("📥 Download Insights Report", insights_text, file_name="portfolio_insights.txt")
+        else:
+            st.success("No alerts. Portfolio looks healthy.")
+            for note in insights:
+                st.markdown(f"- {note}")
+        else:
+            st.success("No alerts. Portfolio looks healthy.")
         metric_cols = st.columns(2)
         perf_metrics = [
             ("📦 My Portfolio", portfolio_change),
@@ -235,4 +298,3 @@ if uploaded_files:
                 st.plotly_chart(fig_account, use_container_width=True)
 else:
     st.info("Upload at least one CSV or Excel portfolio file to get started.")
-    
