@@ -345,7 +345,7 @@ if uploaded_files:
 # ────────────────────────────────────────────────────────────────────────────────
 # Performance Summary (Corrected Placement)
 # ────────────────────────────────────────────────────────────────────────────────
-    st.subheader("�� Performance Metrics")
+    st.subheader("📈 Performance Metrics")
     
     # Create two rows - top row for portfolio, bottom for benchmarks
     top_cols = st.columns(1)
@@ -373,7 +373,6 @@ if uploaded_files:
             st.metric("My Portfolio", "N/A")
 
     # Benchmarks
-    st.markdown("### Market Benchmarks")
     for i, (label, value) in enumerate(benchmark_data.items()):
         with bench_cols[i]:
             if value is not None:
