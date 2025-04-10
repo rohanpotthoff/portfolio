@@ -256,6 +256,6 @@ if uploaded_files:
 
             # Export insights to download
             import io
-            insights_buffer = io.StringIO("\n".join(insights))
+            insights_buffer = io.StringIO('
+'.join(insights))
             st.download_button("📥 Download Insights Report", insights_buffer, file_name="portfolio_insights.txt", mime="text/plain")
-    
