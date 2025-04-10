@@ -186,12 +186,21 @@ if uploaded_files:
                 data.append({"Ticker": ticker, "Current Price": None, "Sector": "Unknown"})
 
         if portfolio_start_value > 0 and portfolio_normalized is not None:
-            portfolio_change = (portfolio_end_value / portfolio_start_value - 1) * 100
-            portfolio_normalized = pd.DataFrame({
-                "Date": hist.index,
-                "Normalized Price": portfolio_normalized / portfolio_start_value * 100,
-                "Index": "My Portfolio"
-            })
+            try:
+                # Only create the DataFrame if we have valid historical data
+                if not hist.empty:
+                    portfolio_change = (portfolio_end_value / portfolio_start_value - 1) * 100
+                    portfolio_normalized = pd.DataFrame({
+                        "Date": hist.index,
+                        "Normalized Price": portfolio_normalized / portfolio_start_value * 100,
+                        "Index": "My Portfolio"
+                    })
+                else:
+                    portfolio_normalized = None
+                    st.warning("Could not fetch enough historical data for portfolio normalization")
+            except Exception as e:
+                st.error(f"Error creating portfolio normalized data: {str(e)}")
+                portfolio_normalized = None
 
         price_df = pd.DataFrame(data)
         df = df.merge(price_df, on="Ticker", how="left")
@@ -277,9 +286,16 @@ if uploaded_files:
                 st.markdown(f"<div style='font-size: 14px; color: {color};'>{label}: {formatted_value}</div>", unsafe_allow_html=True)
 
         if benchmark_series:
-            all_series = pd.concat(benchmark_series + ([portfolio_normalized] if portfolio_normalized is not None else []))
-            fig = px.line(all_series, x="Date", y="Normalized Price", color="Index", title="Normalized Performance Comparison")
-            st.plotly_chart(fig, use_container_width=True)
+            try:
+                all_series = pd.concat(benchmark_series)
+                if portfolio_normalized is not None:
+                    all_series = pd.concat([all_series, portfolio_normalized])
+                
+                fig = px.line(all_series, x="Date", y="Normalized Price", color="Index", 
+                            title="Normalized Performance Comparison")
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"Could not generate performance chart: {str(e)}")
 
         st.subheader("📊 Portfolio Overview")
         st.dataframe(df)
