@@ -12,7 +12,7 @@ import io
 st.set_page_config(page_title="Portfolio Tracker Pro", layout="wide")
 
 # Constants
-MONEY_MARKET_TICKERS = ["WMPXX", "FNSXX", "VMFXX", "SPAXX"]  # Add others as needed
+MONEY_MARKET_TICKERS = ["WMPXX", "FNSXX", "VMFXX"]  # Add others as needed
 COMPARISON_TICKERS = {
     "S&P 500": "^GSPC",
     "Nasdaq 100": "^NDX",
