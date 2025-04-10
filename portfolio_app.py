@@ -10,8 +10,27 @@ st.set_page_config(page_title="Portfolio Tracker", layout="wide")
 
 # Version header with tooltip
 st.title("📈 Portfolio Tracker Dashboard")
-st.caption("Version 1.0.0.1")
-st.markdown("<small title='Created by Rohan Potthoff (rohanpotthoff@gmail.com)'>ℹ️ Hover for contact info</small>", unsafe_allow_html=True)
+st.caption("Version 1.0.0.2")
+st.markdown("""
+<small title='Created by Rohan Potthoff (rohanpotthoff@gmail.com)
+
+---
+
+🆕 Version History:
+
+🔹 **v1.0.0.2**
+- Added open-to-current price logic for "Today" performance
+- Fixed indentation bug in portfolio normalization
+- Enhanced benchmark overlay chart
+
+🔹 **v1.0.0.1**
+- Portfolio and benchmark performance summary grid
+- Normalized comparison chart
+- Sector fallback logic for ETFs, Mutual Funds, Crypto
+- Duplicate holdings detection across multiple uploads
+
+'>ℹ️ Hover for contact info & version notes</small>
+""", unsafe_allow_html=True), unsafe_allow_html=True)
 
 # File uploader placed at the top
 uploaded_files = st.file_uploader("Upload your holdings CSV or Excel file", type=["csv", "xlsx"], accept_multiple_files=True)
@@ -152,7 +171,7 @@ if uploaded_files:
                 if not hist.empty:
                     norm_price = hist["Close"] / hist["Close"].iloc[0] * 100
                     if portfolio_normalized is None:
-                    portfolio_normalized = norm_price * quantity
+                        portfolio_normalized = norm_price * quantity
                 else:
                     portfolio_normalized += norm_price * quantity
 
