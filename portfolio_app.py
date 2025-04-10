@@ -28,12 +28,15 @@ with st.sidebar.expander("🔧 Filters", expanded=True):
     "1Y": "1y",
     "5Y": "5y"
 }
-    selected_period = st.selectbox("Select time range", list(period_map.keys()), index=0)
+        selected_period = st.selectbox("Select time range", list(period_map.keys()), index=0)
 
-    if "Account" in df.columns:
-        accounts = df["Account"].dropna().unique().tolist()
-        selected_accounts = st.multiselect("Filter by account(s):", accounts, default=accounts)
-        df = df[df["Account"].isin(selected_accounts)]
+    if uploaded_files:
+        if "Account" in df.columns:
+            accounts = df["Account"].dropna().unique().tolist()
+            selected_accounts = st.multiselect("Filter by account(s):", accounts, default=accounts)
+            df = df[df["Account"].isin(selected_accounts)]
+
+    
 
 
 
