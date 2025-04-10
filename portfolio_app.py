@@ -255,50 +255,7 @@ if uploaded_files:
                     st.markdown(f"- {note}")
 
             # Export insights to download
-            insights_text = "
-".join(insights)
-            st.download_button("📥 Download Insights Report", insights_text, file_name="portfolio_insights.txt")
-        else:
-            st.success("No alerts. Portfolio looks healthy.")
-        metric_cols = st.columns(2)
-        perf_metrics = [
-            ("📦 My Portfolio", portfolio_change),
-            *[(f"📊 {label}", benchmark_data.get(label)) for label in comparison_tickers]
-        ]
-
-        for i, (label, value) in enumerate(perf_metrics):
-            color = "green" if value is not None and value >= 0 else "red"
-            arrow = "⬆️" if value is not None and value >= 0 else "⬇️"
-            formatted_value = f"{value:+.2f}% {arrow}" if value is not None else "N/A"
-            with metric_cols[i % 2]:
-                st.markdown(f"<div style='font-size: 14px; color: {color};'>{label}: {formatted_value}</div>", unsafe_allow_html=True)
-
-        if benchmark_series:
-            all_series = pd.concat(benchmark_series + ([portfolio_normalized] if portfolio_normalized is not None else []))
-            fig = px.line(all_series, x="Date", y="Normalized Price", color="Index", title="Normalized Performance Comparison")
-            st.plotly_chart(fig, use_container_width=True)
-
-        st.subheader("📊 Portfolio Overview")
-        st.dataframe(df)
-        total_value = df["Market Value"].sum()
-        st.metric("Total Portfolio Value", f"${total_value:,.2f}")
-
-        col1, col2, col3 = st.columns([1.2, 1.2, 1])
-        with col1:
-            sector_group = df.groupby("Sector")["Market Value"].sum().reset_index()
-            fig_sector = px.pie(sector_group, values="Market Value", names="Sector", title="By Sector")
-            st.plotly_chart(fig_sector, use_container_width=True)
-
-        with col2:
-            if "Asset Class" in df.columns:
-                asset_group = df.groupby("Asset Class")["Market Value"].sum().reset_index()
-                fig_asset = px.pie(asset_group, values="Market Value", names="Asset Class", title="By Asset Class")
-                st.plotly_chart(fig_asset, use_container_width=True)
-
-        with col3:
-            if "Account" in df.columns:
-                account_group = df.groupby("Account")["Market Value"].sum().reset_index()
-                fig_account = px.pie(account_group, values="Market Value", names="Account", title="By Account")
-                st.plotly_chart(fig_account, use_container_width=True)
-else:
-    st.info("Upload at least one CSV or Excel portfolio file to get started.")
+            import io
+            insights_buffer = io.StringIO("\n".join(insights))
+            st.download_button("📥 Download Insights Report", insights_buffer, file_name="portfolio_insights.txt", mime="text/plain")
+    
