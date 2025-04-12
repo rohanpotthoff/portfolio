@@ -16,8 +16,8 @@ MONEY_MARKET_TICKERS = ["WMPXX", "FNSXX", "VMFXX"]
 COMPARISON_TICKERS = {
     "S&P 500": "^GSPC",
     "Nasdaq 100": "^NDX",
-    "Euro Stoxx 50": "^STOXX50E",
-    "10Y US Treasury": "^TNX"
+    "Euro Stoxx 50": "^STOXX50E"
+    # Removed 10Y Treasury as requested
 }
 PERIOD_MAP = {
     "Today": "1d",
@@ -123,6 +123,7 @@ def fetch_market_data(label, symbol, period):
         is_crypto = any(x in symbol for x in ["-USD", "-EUR"])
         is_european = any(x in symbol for x in ["^STOXX", ".PA", ".AS", ".DE", ".L", "BNP", "AMS:", "LON:", "FRA:", "EPA:"])
         is_otc = any(x in symbol for x in ["BNPQF", "BNPQY"]) or (len(symbol) == 5 and symbol.endswith("F"))
+        is_etf = any(x in symbol for x in ["RSP", "EEM", "VTI", "CLOU", "KBE", "QQQ", "QQQJ", "SIXG"]) or symbol.startswith("^")
         ticker = yf.Ticker(symbol)
         hist = pd.DataFrame()
 
@@ -132,21 +133,41 @@ def fetch_market_data(label, symbol, period):
             
             # European market adjustment
             if is_european:
-                # Convert NY market times to Berlin time (6 hours ahead)
-                berlin_open = market_open - datetime.timedelta(hours=6)
-                berlin_close = market_close - datetime.timedelta(hours=6)
-                
-                try:
-                    hist = ticker.history(
-                        start=berlin_open,
-                        end=berlin_close,
-                        interval="5m",
-                        prepost=False
-                    )
-                except Exception as e:
-                    # Fallback to daily data if 5-minute data fails
-                    st.warning(f"5-minute data unavailable for {symbol}, using daily data instead: {str(e)}")
-                    hist = ticker.history(period=period)
+                # For Euro Stoxx 50 and other European markets, use a different approach
+                if "^STOXX" in symbol:
+                    # Use a longer period for Euro Stoxx 50 to ensure we get data
+                    try:
+                        # Get data for the last 3 days to ensure we have enough data
+                        hist = ticker.history(period="3d")
+                        
+                        # Filter to just today's data if available
+                        today = datetime.datetime.now().date()
+                        if not hist.empty and isinstance(hist.index[0], pd.Timestamp):
+                            hist = hist[hist.index.date == today]
+                            
+                        # If still empty, use all data
+                        if hist.empty:
+                            hist = ticker.history(period=period)
+                    except Exception as e:
+                        st.warning(f"Error fetching Euro Stoxx 50 data: {str(e)}")
+                        hist = ticker.history(period=period)
+                else:
+                    # Other European markets
+                    try:
+                        # Convert NY market times to European time (6 hours ahead)
+                        euro_open = market_open - datetime.timedelta(hours=6)
+                        euro_close = market_close - datetime.timedelta(hours=6)
+                        
+                        hist = ticker.history(
+                            start=euro_open,
+                            end=euro_close,
+                            interval="5m",
+                            prepost=False
+                        )
+                    except Exception as e:
+                        # Fallback to daily data if 5-minute data fails
+                        st.warning(f"5-minute data unavailable for {symbol}, using daily data instead: {str(e)}")
+                        hist = ticker.history(period=period)
             else:
                 try:
                     hist = ticker.history(
@@ -223,7 +244,7 @@ def is_money_market(ticker):
 # ==============================================
 def render_header():
     st.title("📊 Portfolio Tracker")
-    st.caption("Version 4.9 | Created by Rohan Potthoff")
+    st.caption("Version 5.0 | Created by Rohan Potthoff")
     st.markdown("""
     <style>
     .social-icons { display: flex; gap: 15px; margin-top: -10px; margin-bottom: 10px; }
@@ -240,10 +261,10 @@ def render_header():
 def render_sidebar():
     with st.sidebar.expander("📦 Version History", expanded=False):
         st.markdown("""
+        - **v5.0**: Fixed performance calculation, removed 10Y Treasury, improved ETF handling
         - **v4.9**: Fixed 5-minute interval data processing and OTC stock handling
         - **v4.8**: Fixed DatetimeIndex.dt attribute error for multiple stocks
         - **v4.7**: Fixed portfolio valuation, weekend handling, and European stocks
-        - **v4.6**: Fixed cryptocurrency data handling and timezone consistency
         """)
     
     with st.sidebar.expander("🔧 Filters & Settings", expanded=True):
@@ -420,20 +441,47 @@ def main():
                                     lambda x: x.replace(tzinfo=None) if hasattr(x, 'tzinfo') else x
                                 )
                                 
-                                # Use pd.concat instead of merge for more robust handling
+                                # Rename the Normalized column to the ticker symbol
                                 hist_copy = hist_copy.rename(columns={"Normalized": ticker})
                                 
-                                # Use simple merge instead of complex mapping
-                                combined = pd.merge(
-                                    portfolio_copy,
-                                    hist_copy,
-                                    on="Date",
-                                    how="outer"
-                                )
-                                # Sort by date and remove duplicates
-                                combined = combined.sort_values("Date").drop_duplicates(subset=["Date"])
-                                
-                                portfolio_history = combined
+                                # Use simple merge with better error handling
+                                try:
+                                    combined = pd.merge(
+                                        portfolio_copy,
+                                        hist_copy,
+                                        on="Date",
+                                        how="outer"
+                                    )
+                                    # Sort by date and remove duplicates
+                                    combined = combined.sort_values("Date").drop_duplicates(subset=["Date"])
+                                    
+                                    portfolio_history = combined
+                                except Exception as e:
+                                    st.warning(f"Error merging data for {ticker}: {str(e)}")
+                                    # Try an alternative approach
+                                    try:
+                                        # Convert dates to strings for more reliable merging
+                                        portfolio_copy["Date_str"] = portfolio_copy["Date"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                                        hist_copy["Date_str"] = hist_copy["Date"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                                        
+                                        # Merge on string dates
+                                        combined = pd.merge(
+                                            portfolio_copy,
+                                            hist_copy,
+                                            on="Date_str",
+                                            how="outer"
+                                        )
+                                        
+                                        # Convert back to datetime
+                                        combined["Date"] = pd.to_datetime(combined["Date_str"])
+                                        combined = combined.drop("Date_str", axis=1)
+                                        
+                                        # Sort by date and remove duplicates
+                                        combined = combined.sort_values("Date").drop_duplicates(subset=["Date"])
+                                        
+                                        portfolio_history = combined
+                                    except Exception as e2:
+                                        st.error(f"Failed alternative merge for {ticker}: {str(e2)}")
                             else:
                                 portfolio_history = hist_copy.rename(columns={"Normalized": ticker})
                     except Exception as e:
@@ -666,8 +714,15 @@ def main():
 
                 # Earnings alerts
                 for ticker in df.Ticker.unique():
+                    # Skip money market funds, ETFs, indices, and crypto
                     if is_money_market(ticker):
                         continue
+                    
+                    # Skip ETFs, indices, and crypto that don't have earnings
+                    if any(x in ticker for x in ["RSP", "EEM", "VTI", "CLOU", "KBE", "QQQ", "QQQJ", "SIXG"]) or \
+                       ticker.startswith("^") or "-USD" in ticker or "-EUR" in ticker:
+                        continue
+                        
                     try:
                         cal = yf.Ticker(ticker).calendar
                         
@@ -692,8 +747,12 @@ def main():
                                 days = (earnings_date - datetime.date.today()).days
                                 if 0 <= days <= 14:
                                     insights.append(f"📅 **{ticker}** earnings in {days} days")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # Silently ignore 404 errors for ETFs and crypto
+                        if "404" in str(e):
+                            pass
+                        else:
+                            st.warning(f"Error fetching earnings for {ticker}: {str(e)}")
 
             # Display insights
             if insights:
