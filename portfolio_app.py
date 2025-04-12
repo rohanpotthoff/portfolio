@@ -121,7 +121,7 @@ def fetch_market_data(label, symbol, period):
     """Fetch market data with robust error handling and consistent timezone handling"""
     try:
         is_crypto = any(x in symbol for x in ["-USD", "-EUR"])
-        is_european = any(x in symbol for x in ["^STOXX", ".PA", ".AS", ".DE", ".L", "BNP", "BNPQF"])
+        is_european = any(x in symbol for x in ["^STOXX", ".PA", ".AS", ".DE", ".L", "BNP", "BNPQF", "AMS:", "LON:", "FRA:", "EPA:"])
         ticker = yf.Ticker(symbol)
         hist = pd.DataFrame()
 
@@ -160,7 +160,8 @@ def fetch_market_data(label, symbol, period):
         
         # IMPORTANT: Remove timezone info from all datetime indices for consistent merging
         if not hist.empty and hist.index.tz is not None:
-            hist.index = hist.index.tz_localize(None)
+            # Convert to timezone-naive datetime objects without using .dt accessor
+            hist.index = pd.DatetimeIndex([d.replace(tzinfo=None) for d in hist.index])
             
         # Ensure we have the required columns
         if 'Close' not in hist.columns:
@@ -211,7 +212,7 @@ def is_money_market(ticker):
 # ==============================================
 def render_header():
     st.title("📊 Portfolio Tracker")
-    st.caption("Version 4.7 | Created by Rohan Potthoff")
+    st.caption("Version 4.8 | Created by Rohan Potthoff")
     st.markdown("""
     <style>
     .social-icons { display: flex; gap: 15px; margin-top: -10px; margin-bottom: 10px; }
@@ -228,10 +229,10 @@ def render_header():
 def render_sidebar():
     with st.sidebar.expander("📦 Version History", expanded=False):
         st.markdown("""
+        - **v4.8**: Fixed DatetimeIndex.dt attribute error for multiple stocks
         - **v4.7**: Fixed portfolio valuation, weekend handling, and European stocks
         - **v4.6**: Fixed cryptocurrency data handling and timezone consistency
         - **v4.5**: Fixed timezone handling and yfinance data type issues
-        - **v4.4**: Comprehensive error handling, crypto support, stability fixes
         """)
     
     with st.sidebar.expander("🔧 Filters & Settings", expanded=True):
@@ -374,36 +375,48 @@ def main():
                         if 'Date' in hist.columns and 'Normalized' in hist.columns:
                             hist_copy = hist[["Date", "Normalized"]].copy()
                             
-                            # Ensure Date is a proper datetime
-                            hist_copy["Date"] = pd.to_datetime(hist_copy["Date"]).dt.tz_localize(None)
+                            # Ensure Date is a proper datetime - handle both Series and DatetimeIndex
+                            if isinstance(hist_copy["Date"], pd.DatetimeIndex):
+                                # Convert DatetimeIndex to regular datetime Series
+                                hist_copy["Date"] = pd.Series(hist_copy["Date"].to_pydatetime())
+                            else:
+                                # For regular Series, use pd.to_datetime
+                                hist_copy["Date"] = pd.to_datetime(hist_copy["Date"])
+                            
+                            # Remove timezone info if present
+                            hist_copy["Date"] = hist_copy["Date"].apply(
+                                lambda x: x.replace(tzinfo=None) if hasattr(x, 'tzinfo') else x
+                            )
                             
                             if not portfolio_history.empty:
                                 # Create a copy to avoid modifying original data
                                 portfolio_copy = portfolio_history.copy()
                                 
                                 # Ensure both Date columns are timezone-naive datetime objects
-                                portfolio_copy["Date"] = pd.to_datetime(portfolio_copy["Date"]).dt.tz_localize(None)
+                                if isinstance(portfolio_copy["Date"], pd.DatetimeIndex):
+                                    # Convert DatetimeIndex to regular datetime Series
+                                    portfolio_copy["Date"] = pd.Series(portfolio_copy["Date"].to_pydatetime())
+                                else:
+                                    # For regular Series, use pd.to_datetime
+                                    portfolio_copy["Date"] = pd.to_datetime(portfolio_copy["Date"])
+                                
+                                # Remove timezone info if present
+                                portfolio_copy["Date"] = portfolio_copy["Date"].apply(
+                                    lambda x: x.replace(tzinfo=None) if hasattr(x, 'tzinfo') else x
+                                )
                                 
                                 # Use pd.concat instead of merge for more robust handling
                                 hist_copy = hist_copy.rename(columns={"Normalized": ticker})
                                 
-                                # Combine the dataframes
-                                all_columns = portfolio_copy.columns.tolist() + [ticker]
-                                combined = pd.DataFrame(columns=all_columns)
-                                combined["Date"] = pd.to_datetime(portfolio_copy["Date"].tolist() + hist_copy["Date"].tolist()).dt.tz_localize(None)
-                                
-                                # Fill in values from both dataframes
-                                for col in portfolio_copy.columns:
-                                    if col != "Date":
-                                        # Create a dictionary mapping dates to values
-                                        value_dict = dict(zip(portfolio_copy["Date"], portfolio_copy[col]))
-                                        combined[col] = combined["Date"].map(value_dict)
-                                
-                                # Add the new ticker column
-                                value_dict = dict(zip(hist_copy["Date"], hist_copy[ticker]))
-                                combined[ticker] = combined["Date"].map(value_dict)
-                                
+                                # Use simple merge instead of complex mapping
+                                combined = pd.merge(
+                                    portfolio_copy,
+                                    hist_copy,
+                                    on="Date",
+                                    how="outer"
+                                )
                                 # Sort by date and remove duplicates
+                                combined = combined.sort_values("Date").drop_duplicates(subset=["Date"])
                                 combined = combined.sort_values("Date").drop_duplicates(subset=["Date"])
                                 
                                 portfolio_history = combined
@@ -476,8 +489,21 @@ def main():
                         # Clean up the portfolio history data
                         portfolio_history = portfolio_history.copy()
                         
-                        # Ensure Date column is properly formatted
-                        portfolio_history['Date'] = pd.to_datetime(portfolio_history['Date']).dt.tz_localize(None)
+                        # Ensure Date column is properly formatted - handle both Series and DatetimeIndex
+                        if isinstance(portfolio_history["Date"], pd.DatetimeIndex):
+                            # Already a DatetimeIndex, convert to Series
+                            date_series = pd.Series(portfolio_history["Date"].to_pydatetime())
+                            # Create a new DataFrame with the converted Date
+                            portfolio_history = portfolio_history.reset_index(drop=True)
+                            portfolio_history["Date"] = date_series
+                        else:
+                            # For regular Series, use pd.to_datetime
+                            portfolio_history["Date"] = pd.to_datetime(portfolio_history["Date"])
+                        
+                        # Remove timezone info if present
+                        portfolio_history["Date"] = portfolio_history["Date"].apply(
+                            lambda x: x.replace(tzinfo=None) if hasattr(x, 'tzinfo') else x
+                        )
                         
                         # Drop any rows with NaN Date values
                         portfolio_history = portfolio_history.dropna(subset=['Date'])
@@ -490,7 +516,8 @@ def main():
                             portfolio_history[col] = portfolio_history[col].ffill().bfill()
                         
                         # Set index and calculate mean, handling NaN values properly
-                        portfolio_mean = portfolio_history.set_index('Date')[numeric_cols].mean(axis=1, skipna=True)
+                        portfolio_history_indexed = portfolio_history.set_index('Date')
+                        portfolio_mean = portfolio_history_indexed[numeric_cols].mean(axis=1, skipna=True)
                         
                         # Create a new dataframe with the results
                         portfolio_norm = pd.DataFrame({
@@ -505,6 +532,7 @@ def main():
                 except Exception as e:
                     st.error(f"Error calculating portfolio performance: {str(e)}")
                     st.error(f"Details: {str(e)}")
+                    st.info(f"Debug info - Date type: {type(portfolio_history['Date']).__name__ if not portfolio_history.empty else 'empty'}")
                     portfolio_norm = pd.DataFrame(columns=["Date", "Normalized", "Index"])
 
                 # Process benchmark data
@@ -512,8 +540,20 @@ def main():
                 for b in benchmark_series:
                     try:
                         bench_df = pd.DataFrame(b["data"])
-                        # Ensure Date is timezone-naive for consistent concatenation
-                        bench_df["Date"] = pd.to_datetime(bench_df["Date"]).dt.tz_localize(None)
+                        
+                        # Ensure Date is properly formatted - handle both Series and DatetimeIndex
+                        if isinstance(bench_df["Date"], pd.DatetimeIndex):
+                            # Convert DatetimeIndex to regular datetime Series
+                            bench_df["Date"] = pd.Series(bench_df["Date"].to_pydatetime())
+                        else:
+                            # For regular Series, use pd.to_datetime
+                            bench_df["Date"] = pd.to_datetime(bench_df["Date"])
+                        
+                        # Remove timezone info if present
+                        bench_df["Date"] = bench_df["Date"].apply(
+                            lambda x: x.replace(tzinfo=None) if hasattr(x, 'tzinfo') else x
+                        )
+                        
                         bench_df["Index"] = b["label"]
                         bench_dfs.append(bench_df)
                     except Exception as e:
@@ -521,11 +561,20 @@ def main():
                 
                 # Combine portfolio and benchmark data
                 try:
-                    combined = pd.concat([portfolio_norm] + bench_dfs, ignore_index=True)
+                    # Make sure portfolio_norm Date is not a DatetimeIndex
+                    if isinstance(portfolio_norm["Date"], pd.DatetimeIndex):
+                        portfolio_norm = portfolio_norm.reset_index(drop=True)
+                        portfolio_norm["Date"] = pd.Series(portfolio_norm["Date"].to_pydatetime())
+                    
+                    # Use a safer approach to combine data
+                    all_dfs = [portfolio_norm] + bench_dfs
+                    combined = pd.concat(all_dfs, ignore_index=True)
+                    
                     # Sort by Date for proper visualization
                     combined = combined.sort_values("Date")
                 except Exception as e:
                     st.error(f"Error combining performance data: {str(e)}")
+                    st.error(f"Details: {str(e)}")
                     combined = pd.DataFrame(columns=["Date", "Normalized", "Index"])
 
                 fig = px.line(
