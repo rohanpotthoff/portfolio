@@ -30,25 +30,90 @@ PERIOD_MAP = {
     "5Y": "5y"
 }
 MARKET_TIMEZONE = pytz.timezone("America/New_York")
+US_HOLIDAYS = [
+    # 2024 US Market Holidays
+    datetime.date(2024, 1, 1),    # New Year's Day
+    datetime.date(2024, 1, 15),   # Martin Luther King Jr. Day
+    datetime.date(2024, 2, 19),   # Presidents' Day
+    datetime.date(2024, 3, 29),   # Good Friday
+    datetime.date(2024, 5, 27),   # Memorial Day
+    datetime.date(2024, 6, 19),   # Juneteenth
+    datetime.date(2024, 7, 4),    # Independence Day
+    datetime.date(2024, 9, 2),    # Labor Day
+    datetime.date(2024, 11, 28),  # Thanksgiving Day
+    datetime.date(2024, 12, 25),  # Christmas Day
+    # 2025 US Market Holidays
+    datetime.date(2025, 1, 1),    # New Year's Day
+    datetime.date(2025, 1, 20),   # Martin Luther King Jr. Day
+    datetime.date(2025, 2, 17),   # Presidents' Day
+    datetime.date(2025, 4, 18),   # Good Friday
+    datetime.date(2025, 5, 26),   # Memorial Day
+    datetime.date(2025, 6, 19),   # Juneteenth
+    datetime.date(2025, 7, 4),    # Independence Day
+    datetime.date(2025, 9, 1),    # Labor Day
+    datetime.date(2025, 11, 27),  # Thanksgiving Day
+    datetime.date(2025, 12, 25),  # Christmas Day
+]
 
 # ==============================================
 # Helper Functions
 # ==============================================
 def get_market_times():
-    """Get proper market open/close times based on current time"""
+    """Get proper market open/close times based on current time, accounting for weekends and holidays"""
     now = datetime.datetime.now(MARKET_TIMEZONE)
+    today = now.date()
+    
+    # Create base market hours for today
     market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
     market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
     
-    # Handle weekends
-    if now.weekday() >= 5:  # Saturday or Sunday
-        last_friday = now - datetime.timedelta(days=(now.weekday() - 4) % 7)
-        market_open = last_friday.replace(hour=9, minute=30)
-        market_close = last_friday.replace(hour=16, minute=0)
-    # Handle after hours
+    # Check if today is a weekend or holiday
+    is_weekend = now.weekday() >= 5  # Saturday or Sunday
+    is_holiday = today in US_HOLIDAYS
+    
+    if is_weekend or is_holiday:
+        # Find the most recent trading day
+        days_back = 1
+        check_date = today - datetime.timedelta(days=days_back)
+        
+        while check_date.weekday() >= 5 or check_date in US_HOLIDAYS:
+            days_back += 1
+            check_date = today - datetime.timedelta(days=days_back)
+        
+        # Set market times to the most recent trading day
+        market_open = now.replace(
+            year=check_date.year,
+            month=check_date.month,
+            day=check_date.day,
+            hour=9,
+            minute=30,
+            second=0,
+            microsecond=0
+        )
+        market_close = market_open.replace(hour=16, minute=0)
+    
+    # Handle after hours on a trading day
     elif now > market_close:
-        market_open += datetime.timedelta(days=1)
-        market_close += datetime.timedelta(days=1)
+        # Find the next trading day
+        days_forward = 1
+        check_date = today + datetime.timedelta(days=days_forward)
+        
+        while check_date.weekday() >= 5 or check_date in US_HOLIDAYS:
+            days_forward += 1
+            check_date = today + datetime.timedelta(days=days_forward)
+        
+        # Set market times to the next trading day
+        market_open = now.replace(
+            year=check_date.year,
+            month=check_date.month,
+            day=check_date.day,
+            hour=9,
+            minute=30,
+            second=0,
+            microsecond=0
+        )
+        market_close = market_open.replace(hour=16, minute=0)
+    
     return market_open, market_close
 
 @lru_cache(maxsize=128)
@@ -56,6 +121,7 @@ def fetch_market_data(label, symbol, period):
     """Fetch market data with robust error handling and consistent timezone handling"""
     try:
         is_crypto = any(x in symbol for x in ["-USD", "-EUR"])
+        is_european = any(x in symbol for x in ["^STOXX", ".PA", ".AS", ".DE", ".L", "BNP", "BNPQF"])
         ticker = yf.Ticker(symbol)
         hist = pd.DataFrame()
 
@@ -64,7 +130,7 @@ def fetch_market_data(label, symbol, period):
             market_open, market_close = get_market_times()
             
             # European market adjustment
-            if "^STOXX50E" in symbol:
+            if is_european:
                 # Convert NY market times to Berlin time (6 hours ahead)
                 berlin_open = market_open - datetime.timedelta(hours=6)
                 berlin_close = market_close - datetime.timedelta(hours=6)
@@ -145,7 +211,7 @@ def is_money_market(ticker):
 # ==============================================
 def render_header():
     st.title("📊 Portfolio Tracker")
-    st.caption("Version 4.6 | Created by Rohan Potthoff")
+    st.caption("Version 4.7 | Created by Rohan Potthoff")
     st.markdown("""
     <style>
     .social-icons { display: flex; gap: 15px; margin-top: -10px; margin-bottom: 10px; }
@@ -162,19 +228,19 @@ def render_header():
 def render_sidebar():
     with st.sidebar.expander("📦 Version History", expanded=False):
         st.markdown("""
+        - **v4.7**: Fixed portfolio valuation, weekend handling, and European stocks
         - **v4.6**: Fixed cryptocurrency data handling and timezone consistency
         - **v4.5**: Fixed timezone handling and yfinance data type issues
         - **v4.4**: Comprehensive error handling, crypto support, stability fixes
-        - **v4.3**: Timezone corrections and performance optimizations
         """)
     
     with st.sidebar.expander("🔧 Filters & Settings", expanded=True):
         selected_period = st.selectbox(
-            "Performance Period", 
-            list(PERIOD_MAP.keys()), 
+            "Performance Period",
+            list(PERIOD_MAP.keys()),
             index=0
         )
-        st.caption("Money market funds valued at $1.00 | Crypto supported")
+        # Removed truncated tooltip
     return selected_period
 
 # ==============================================
@@ -230,10 +296,16 @@ def main():
             portfolio_start_value = 0
             portfolio_end_value = 0
 
+            # First pass: Calculate portfolio value
+            portfolio_start_value = 0
+            portfolio_end_value = 0
+            
             for ticker in df.Ticker.unique():
                 try:
+                    qty = df[df.Ticker == ticker].Quantity.sum()
+                    
                     if is_money_market(ticker):
-                        qty = df[df.Ticker == ticker].Quantity.sum()
+                        # Money market funds are always valued at $1.00
                         portfolio_start_value += qty * 1.0
                         portfolio_end_value += qty * 1.0
                         price_data.append({
@@ -244,59 +316,134 @@ def main():
                         })
                         continue
 
+                    # Fetch market data with better error handling for European stocks
                     result = fetch_market_data(ticker, ticker, period)
                     if not result:
-                        raise ValueError(f"No data for {ticker}")
+                        st.warning(f"Could not fetch data for {ticker}. Using last known price.")
+                        # Try to get basic info for price
+                        try:
+                            ticker_info = yf.Ticker(ticker).info
+                            current_price = ticker_info.get('regularMarketPrice', 0)
+                            if current_price and current_price > 0:
+                                portfolio_start_value += qty * current_price
+                                portfolio_end_value += qty * current_price
+                                price_data.append({
+                                    "Ticker": ticker,
+                                    "Current Price": current_price,
+                                    "Sector": ticker_info.get("sector", "Unknown"),
+                                    "Asset Class": ticker_info.get("quoteType", "Stock").title()
+                                })
+                                continue
+                        except Exception:
+                            pass
+                        
+                        # If we still can't get data, skip this ticker
+                        st.error(f"Skipping {ticker} due to data retrieval failure.")
+                        continue
                         
                     hist = result["data"]
                     if hist.empty:
-                        raise ValueError(f"Empty data for {ticker}")
-                        
-                    qty = df[df.Ticker == ticker].Quantity.sum()
-                    start_price = hist.Close.iloc[0] if 'Close' in hist else 1.0
-                    current_price = hist.Close.iloc[-1] if 'Close' in hist else 1.0
+                        st.warning(f"Empty data for {ticker}. Using last known price.")
+                        continue
                     
+                    # Safely extract prices with proper type checking
+                    try:
+                        # For historical data, we need both start and current price
+                        if 'Close' in hist.columns and len(hist) >= 2:
+                            start_price = float(hist['Close'].iloc[0])
+                            current_price = float(hist['Close'].iloc[-1])
+                        else:
+                            # Fallback to current price only
+                            ticker_info = yf.Ticker(ticker).info
+                            current_price = ticker_info.get('regularMarketPrice', 0)
+                            start_price = current_price
+                            
+                        if start_price <= 0 or current_price <= 0:
+                            raise ValueError("Invalid price data")
+                    except Exception as e:
+                        st.warning(f"Price data error for {ticker}: {str(e)}. Using default values.")
+                        start_price = 1.0
+                        current_price = 1.0
+                    
+                    # Update portfolio values
                     portfolio_start_value += qty * start_price
                     portfolio_end_value += qty * current_price
-
+                    
                     # Store performance data with proper error handling
                     try:
-                        if not portfolio_history.empty:
-                            # Create copies to avoid modifying original data
+                        if 'Date' in hist.columns and 'Normalized' in hist.columns:
                             hist_copy = hist[["Date", "Normalized"]].copy()
-                            portfolio_copy = portfolio_history.copy()
                             
-                            # Ensure both Date columns are timezone-naive datetime objects
+                            # Ensure Date is a proper datetime
                             hist_copy["Date"] = pd.to_datetime(hist_copy["Date"]).dt.tz_localize(None)
-                            portfolio_copy["Date"] = pd.to_datetime(portfolio_copy["Date"]).dt.tz_localize(None)
                             
-                            # Use pd.concat instead of merge for more robust handling of different datetime formats
-                            hist_copy = hist_copy.rename(columns={"Normalized": ticker})
-                            combined = pd.concat([portfolio_copy, hist_copy], ignore_index=True)
-                            
-                            # Remove duplicates if any (based on Date)
-                            combined = combined.drop_duplicates(subset=["Date"], keep="first")
-                            
-                            portfolio_history = combined
-                        else:
-                            portfolio_history = hist[["Date", "Normalized"]].rename(columns={"Normalized": ticker})
-                            # Ensure Date is timezone-naive
-                            portfolio_history["Date"] = pd.to_datetime(portfolio_history["Date"]).dt.tz_localize(None)
+                            if not portfolio_history.empty:
+                                # Create a copy to avoid modifying original data
+                                portfolio_copy = portfolio_history.copy()
+                                
+                                # Ensure both Date columns are timezone-naive datetime objects
+                                portfolio_copy["Date"] = pd.to_datetime(portfolio_copy["Date"]).dt.tz_localize(None)
+                                
+                                # Use pd.concat instead of merge for more robust handling
+                                hist_copy = hist_copy.rename(columns={"Normalized": ticker})
+                                
+                                # Combine the dataframes
+                                all_columns = portfolio_copy.columns.tolist() + [ticker]
+                                combined = pd.DataFrame(columns=all_columns)
+                                combined["Date"] = pd.to_datetime(portfolio_copy["Date"].tolist() + hist_copy["Date"].tolist()).dt.tz_localize(None)
+                                
+                                # Fill in values from both dataframes
+                                for col in portfolio_copy.columns:
+                                    if col != "Date":
+                                        # Create a dictionary mapping dates to values
+                                        value_dict = dict(zip(portfolio_copy["Date"], portfolio_copy[col]))
+                                        combined[col] = combined["Date"].map(value_dict)
+                                
+                                # Add the new ticker column
+                                value_dict = dict(zip(hist_copy["Date"], hist_copy[ticker]))
+                                combined[ticker] = combined["Date"].map(value_dict)
+                                
+                                # Sort by date and remove duplicates
+                                combined = combined.sort_values("Date").drop_duplicates(subset=["Date"])
+                                
+                                portfolio_history = combined
+                            else:
+                                portfolio_history = hist_copy.rename(columns={"Normalized": ticker})
                     except Exception as e:
                         st.warning(f"Error processing performance data for {ticker}: {str(e)}")
                         continue
 
-                    # Get stock info
-                    info = yf.Ticker(ticker).info
-                    price_data.append({
-                        "Ticker": ticker,
-                        "Current Price": current_price,
-                        "Sector": info.get("sector", "Unknown"),
-                        "Asset Class": info.get("quoteType", "Stock").title()
-                    })
+                    # Get stock info with robust error handling
+                    try:
+                        info = yf.Ticker(ticker).info
+                        
+                        # Safely extract sector and asset class with type checking
+                        sector = info.get("sector", "Unknown")
+                        if not isinstance(sector, str):
+                            sector = "Unknown"
+                            
+                        asset_class = info.get("quoteType", "Stock")
+                        if not isinstance(asset_class, str):
+                            asset_class = "Stock"
+                            
+                        price_data.append({
+                            "Ticker": ticker,
+                            "Current Price": current_price,
+                            "Sector": sector,
+                            "Asset Class": asset_class.title()
+                        })
+                    except Exception as e:
+                        # Fallback if info retrieval fails
+                        price_data.append({
+                            "Ticker": ticker,
+                            "Current Price": current_price,
+                            "Sector": "Unknown",
+                            "Asset Class": "Stock"
+                        })
+                        st.warning(f"Could not retrieve info for {ticker}: {str(e)}")
 
                 except Exception as e:
-                    st.warning(f"Skipping {ticker}: {str(e)}")
+                    st.error(f"Critical error processing {ticker}: {str(e)}")
                     continue
 
             # Create portfolio performance data
@@ -325,23 +472,36 @@ def main():
                 st.subheader("📊 Performance Comparison")
                 # Handle portfolio normalization with proper error handling
                 try:
-                    # Ensure Date column is properly formatted
-                    portfolio_history['Date'] = pd.to_datetime(portfolio_history['Date']).dt.tz_localize(None)
-                    
-                    # Drop any rows with NaN Date values
-                    portfolio_history = portfolio_history.dropna(subset=['Date'])
-                    
-                    # Set index and calculate mean, handling NaN values properly
-                    numeric_cols = [col for col in portfolio_history.columns if col != 'Date']
-                    portfolio_mean = portfolio_history.set_index('Date')[numeric_cols].mean(axis=1, skipna=True)
-                    
-                    # Create a new dataframe with the results
-                    portfolio_norm = pd.DataFrame({
-                        'Date': portfolio_mean.index,
-                        'Normalized': portfolio_mean.values
-                    })
-                    
-                    portfolio_norm["Index"] = "My Portfolio"
+                    if not portfolio_history.empty:
+                        # Clean up the portfolio history data
+                        portfolio_history = portfolio_history.copy()
+                        
+                        # Ensure Date column is properly formatted
+                        portfolio_history['Date'] = pd.to_datetime(portfolio_history['Date']).dt.tz_localize(None)
+                        
+                        # Drop any rows with NaN Date values
+                        portfolio_history = portfolio_history.dropna(subset=['Date'])
+                        
+                        # Get numeric columns (excluding Date)
+                        numeric_cols = [col for col in portfolio_history.columns if col != 'Date']
+                        
+                        # Fill NaN values with forward fill then backward fill
+                        for col in numeric_cols:
+                            portfolio_history[col] = portfolio_history[col].ffill().bfill()
+                        
+                        # Set index and calculate mean, handling NaN values properly
+                        portfolio_mean = portfolio_history.set_index('Date')[numeric_cols].mean(axis=1, skipna=True)
+                        
+                        # Create a new dataframe with the results
+                        portfolio_norm = pd.DataFrame({
+                            'Date': portfolio_mean.index,
+                            'Normalized': portfolio_mean.values
+                        })
+                        
+                        portfolio_norm["Index"] = "My Portfolio"
+                    else:
+                        st.warning("No portfolio history data available for charting.")
+                        portfolio_norm = pd.DataFrame(columns=["Date", "Normalized", "Index"])
                 except Exception as e:
                     st.error(f"Error calculating portfolio performance: {str(e)}")
                     st.error(f"Details: {str(e)}")
