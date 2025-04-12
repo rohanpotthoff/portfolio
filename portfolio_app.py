@@ -121,12 +121,13 @@ def fetch_market_data(label, symbol, period):
     """Fetch market data with robust error handling and consistent timezone handling"""
     try:
         is_crypto = any(x in symbol for x in ["-USD", "-EUR"])
-        is_european = any(x in symbol for x in ["^STOXX", ".PA", ".AS", ".DE", ".L", "BNP", "BNPQF", "AMS:", "LON:", "FRA:", "EPA:"])
+        is_european = any(x in symbol for x in ["^STOXX", ".PA", ".AS", ".DE", ".L", "BNP", "AMS:", "LON:", "FRA:", "EPA:"])
+        is_otc = any(x in symbol for x in ["BNPQF", "BNPQY"]) or (len(symbol) == 5 and symbol.endswith("F"))
         ticker = yf.Ticker(symbol)
         hist = pd.DataFrame()
 
         # Special handling for intraday data
-        if period == "1d" and not is_crypto:
+        if period == "1d" and not (is_crypto or is_otc):
             market_open, market_close = get_market_times()
             
             # European market adjustment
@@ -135,21 +136,31 @@ def fetch_market_data(label, symbol, period):
                 berlin_open = market_open - datetime.timedelta(hours=6)
                 berlin_close = market_close - datetime.timedelta(hours=6)
                 
-                hist = ticker.history(
-                    start=berlin_open,
-                    end=berlin_close,
-                    interval="5m",
-                    prepost=False
-                )
+                try:
+                    hist = ticker.history(
+                        start=berlin_open,
+                        end=berlin_close,
+                        interval="5m",
+                        prepost=False
+                    )
+                except Exception as e:
+                    # Fallback to daily data if 5-minute data fails
+                    st.warning(f"5-minute data unavailable for {symbol}, using daily data instead: {str(e)}")
+                    hist = ticker.history(period=period)
             else:
-                hist = ticker.history(
-                    start=market_open,
-                    end=market_close,
-                    interval="5m",
-                    prepost=False
-                )
+                try:
+                    hist = ticker.history(
+                        start=market_open,
+                        end=market_close,
+                        interval="5m",
+                        prepost=False
+                    )
+                except Exception as e:
+                    # Fallback to daily data if 5-minute data fails
+                    st.warning(f"5-minute data unavailable for {symbol}, using daily data instead: {str(e)}")
+                    hist = ticker.history(period=period)
         else:
-            # For non-intraday periods or crypto
+            # For non-intraday periods, crypto, or OTC stocks
             hist = ticker.history(period=period)
 
         if hist.empty:
@@ -212,7 +223,7 @@ def is_money_market(ticker):
 # ==============================================
 def render_header():
     st.title("📊 Portfolio Tracker")
-    st.caption("Version 4.8 | Created by Rohan Potthoff")
+    st.caption("Version 4.9 | Created by Rohan Potthoff")
     st.markdown("""
     <style>
     .social-icons { display: flex; gap: 15px; margin-top: -10px; margin-bottom: 10px; }
@@ -229,10 +240,10 @@ def render_header():
 def render_sidebar():
     with st.sidebar.expander("📦 Version History", expanded=False):
         st.markdown("""
+        - **v4.9**: Fixed 5-minute interval data processing and OTC stock handling
         - **v4.8**: Fixed DatetimeIndex.dt attribute error for multiple stocks
         - **v4.7**: Fixed portfolio valuation, weekend handling, and European stocks
         - **v4.6**: Fixed cryptocurrency data handling and timezone consistency
-        - **v4.5**: Fixed timezone handling and yfinance data type issues
         """)
     
     with st.sidebar.expander("🔧 Filters & Settings", expanded=True):
@@ -320,7 +331,11 @@ def main():
                     # Fetch market data with better error handling for European stocks
                     result = fetch_market_data(ticker, ticker, period)
                     if not result:
-                        st.warning(f"Could not fetch data for {ticker}. Using last known price.")
+                        # Special handling for OTC stocks
+                        if any(x in ticker for x in ["BNPQF", "BNPQY"]) or (len(ticker) == 5 and ticker.endswith("F")):
+                            st.info(f"{ticker} appears to be an OTC stock. Using alternative data source.")
+                        else:
+                            st.warning(f"Could not fetch data for {ticker}. Using last known price.")
                         # Try to get basic info for price
                         try:
                             ticker_info = yf.Ticker(ticker).info
@@ -416,7 +431,6 @@ def main():
                                     how="outer"
                                 )
                                 # Sort by date and remove duplicates
-                                combined = combined.sort_values("Date").drop_duplicates(subset=["Date"])
                                 combined = combined.sort_values("Date").drop_duplicates(subset=["Date"])
                                 
                                 portfolio_history = combined
