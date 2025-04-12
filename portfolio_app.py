@@ -85,7 +85,8 @@ def fetch_market_data(label, symbol, period):
             ticker = yf.Ticker(symbol)
             hist = ticker.history(period=period)
             if not hist.empty and hist.index.tz is not None:
-                hist.index = hist.index.tz_convert(None)
+                # Keep timezone info but standardize to NY time for consistency
+                hist.index = hist.index.tz_convert(MARKET_TIMEZONE)
 
         if hist.empty:
             return None
@@ -129,7 +130,7 @@ def is_money_market(ticker):
 # ==============================================
 def render_header():
     st.title("📊 Portfolio Tracker")
-    st.caption("Version 4.4 | Created by Rohan Potthoff")
+    st.caption("Version 4.5 | Created by Rohan Potthoff")
     st.markdown("""
     <style>
     .social-icons { display: flex; gap: 15px; margin-top: -10px; margin-bottom: 10px; }
@@ -146,6 +147,7 @@ def render_header():
 def render_sidebar():
     with st.sidebar.expander("📦 Version History", expanded=False):
         st.markdown("""
+        - **v4.5**: Fixed timezone handling and yfinance data type issues
         - **v4.4**: Comprehensive error handling, crypto support, stability fixes
         - **v4.3**: Timezone corrections and performance optimizations
         """)
@@ -241,15 +243,25 @@ def main():
                     portfolio_start_value += qty * start_price
                     portfolio_end_value += qty * current_price
 
-                    # Store performance data
-                    if not portfolio_history.empty:
-                        portfolio_history = portfolio_history.merge(
-                            hist[["Date", "Normalized"]], 
-                            on="Date", 
-                            how="outer"
-                        ).rename(columns={"Normalized": ticker})
-                    else:
-                        portfolio_history = hist[["Date", "Normalized"]].rename(columns={"Normalized": ticker})
+                    # Store performance data with proper error handling
+                    try:
+                        if not portfolio_history.empty:
+                            # Ensure Date column is properly formatted for merging
+                            if isinstance(hist["Date"].iloc[0], pd.Timestamp):
+                                # Convert both to the same format to ensure proper merging
+                                if not isinstance(portfolio_history["Date"].iloc[0], pd.Timestamp):
+                                    portfolio_history["Date"] = pd.to_datetime(portfolio_history["Date"])
+                            
+                            portfolio_history = portfolio_history.merge(
+                                hist[["Date", "Normalized"]],
+                                on="Date",
+                                how="outer"
+                            ).rename(columns={"Normalized": ticker})
+                        else:
+                            portfolio_history = hist[["Date", "Normalized"]].rename(columns={"Normalized": ticker})
+                    except Exception as e:
+                        st.warning(f"Error merging performance data for {ticker}: {str(e)}")
+                        continue
 
                     # Get stock info
                     info = yf.Ticker(ticker).info
@@ -288,9 +300,25 @@ def main():
             # Performance Visualization
             if not portfolio_history.empty:
                 st.subheader("📊 Performance Comparison")
-                portfolio_norm = portfolio_history.set_index('Date').mean(axis=1).reset_index()
-                portfolio_norm.columns = ["Date", "Normalized"]
-                portfolio_norm["Index"] = "My Portfolio"
+                # Handle portfolio normalization with proper error handling
+                try:
+                    # Convert Date to datetime if it's not already
+                    if not pd.api.types.is_datetime64_any_dtype(portfolio_history['Date']):
+                        portfolio_history['Date'] = pd.to_datetime(portfolio_history['Date'])
+                    
+                    # Set index and calculate mean, handling NaN values properly
+                    portfolio_mean = portfolio_history.set_index('Date').mean(axis=1, skipna=True)
+                    
+                    # Create a new dataframe with the results
+                    portfolio_norm = pd.DataFrame({
+                        'Date': portfolio_mean.index,
+                        'Normalized': portfolio_mean.values
+                    })
+                    
+                    portfolio_norm["Index"] = "My Portfolio"
+                except Exception as e:
+                    st.error(f"Error calculating portfolio performance: {str(e)}")
+                    portfolio_norm = pd.DataFrame(columns=["Date", "Normalized", "Index"])
 
                 bench_dfs = []
                 for b in benchmark_series:
@@ -320,8 +348,20 @@ def main():
                     yaxis_title="Normalized Performance (%)"
                 )
                 
+                # Format x-axis based on period and ensure proper timezone display
                 if period == "1d":
-                    fig.update_xaxes(tickformat="%H:%M")
+                    # For intraday, show hours and minutes
+                    fig.update_xaxes(
+                        tickformat="%H:%M",
+                        title=f"Market Hours ({MARKET_TIMEZONE.zone})"
+                    )
+                elif period in ["1wk", "1mo", "3mo"]:
+                    # For shorter periods, show month and day
+                    fig.update_xaxes(tickformat="%b %d")
+                else:
+                    # For longer periods, show month and year
+                    fig.update_xaxes(tickformat="%b %Y")
+                
                 st.plotly_chart(fig, use_container_width=True)
 
             # Portfolio Insights
@@ -367,10 +407,26 @@ def main():
                         continue
                     try:
                         cal = yf.Ticker(ticker).calendar
-                        if not cal.empty:
+                        
+                        # Check if calendar exists and has the expected structure
+                        if isinstance(cal, pd.DataFrame) and not cal.empty and 'EarningsDate' in cal.columns:
+                            # Handle different possible data types for earnings date
                             earnings_date = cal.EarningsDate.max()
+                            
                             if pd.notna(earnings_date):
-                                days = (earnings_date.date() - datetime.date.today()).days
+                                # Convert to date object safely
+                                if isinstance(earnings_date, pd.Timestamp):
+                                    earnings_date = earnings_date.date()
+                                elif isinstance(earnings_date, datetime.datetime):
+                                    earnings_date = earnings_date.date()
+                                elif isinstance(earnings_date, str):
+                                    try:
+                                        earnings_date = pd.to_datetime(earnings_date).date()
+                                    except:
+                                        continue
+                                
+                                # Calculate days difference
+                                days = (earnings_date - datetime.date.today()).days
                                 if 0 <= days <= 14:
                                     insights.append(f"📅 **{ticker}** earnings in {days} days")
                     except Exception:
