@@ -53,25 +53,28 @@ def get_market_times():
 
 @lru_cache(maxsize=128)
 def fetch_market_data(label, symbol, period):
-    """Fetch market data with robust error handling"""
+    """Fetch market data with robust error handling and consistent timezone handling"""
     try:
         is_crypto = any(x in symbol for x in ["-USD", "-EUR"])
+        ticker = yf.Ticker(symbol)
         hist = pd.DataFrame()
 
+        # Special handling for intraday data
         if period == "1d" and not is_crypto:
             market_open, market_close = get_market_times()
-            ticker = yf.Ticker(symbol)
             
             # European market adjustment
             if "^STOXX50E" in symbol:
+                # Convert NY market times to Berlin time (6 hours ahead)
+                berlin_open = market_open - datetime.timedelta(hours=6)
+                berlin_close = market_close - datetime.timedelta(hours=6)
+                
                 hist = ticker.history(
-                    start=market_open - datetime.timedelta(hours=6),
-                    end=market_close - datetime.timedelta(hours=6),
+                    start=berlin_open,
+                    end=berlin_close,
                     interval="5m",
                     prepost=False
                 )
-                if not hist.empty:
-                    hist.index = hist.index.tz_convert("Europe/Berlin").tz_localize(None)
             else:
                 hist = ticker.history(
                     start=market_open,
@@ -79,34 +82,46 @@ def fetch_market_data(label, symbol, period):
                     interval="5m",
                     prepost=False
                 )
-                if not hist.empty:
-                    hist.index = hist.index.tz_localize(None)
         else:
-            ticker = yf.Ticker(symbol)
+            # For non-intraday periods or crypto
             hist = ticker.history(period=period)
-            if not hist.empty and hist.index.tz is not None:
-                # Keep timezone info but standardize to NY time for consistency
-                hist.index = hist.index.tz_convert(MARKET_TIMEZONE)
 
         if hist.empty:
             return None
 
+        # Create a copy to avoid SettingWithCopyWarning
+        hist = hist.copy()
+        
+        # IMPORTANT: Remove timezone info from all datetime indices for consistent merging
+        if not hist.empty and hist.index.tz is not None:
+            hist.index = hist.index.tz_localize(None)
+            
+        # Ensure we have the required columns
+        if 'Close' not in hist.columns:
+            return None
+            
         # Standardize columns and reset index
-        hist = hist.reset_index().rename(columns={
+        hist_reset = hist.reset_index().rename(columns={
             'index': 'Date',
             'Datetime': 'Date'
         })
-
-        if 'Close' not in hist.columns:
-            return None
-
+        
         # Calculate normalized performance
-        base_price = hist["Close"].iloc[0]
-        hist["Normalized"] = (hist["Close"] / base_price - 1) * 100
+        try:
+            base_price = float(hist['Close'].iloc[0])
+            if base_price <= 0:
+                return None
+                
+            hist_reset["Normalized"] = ((hist['Close'] / base_price) - 1) * 100
+            
+            # Calculate percentage change
+            pct_change = (float(hist['Close'].iloc[-1]) / float(hist['Close'].iloc[0]) - 1) * 100
+        except (IndexError, ZeroDivisionError, TypeError, ValueError):
+            return None
         
         return {
-            "data": hist[["Date", "Normalized"]],
-            "pct_change": (hist["Close"].iloc[-1] / hist["Close"].iloc[0] - 1) * 100,
+            "data": hist_reset[["Date", "Normalized"]],
+            "pct_change": pct_change,
             "label": label
         }
     except Exception as e:
@@ -130,7 +145,7 @@ def is_money_market(ticker):
 # ==============================================
 def render_header():
     st.title("📊 Portfolio Tracker")
-    st.caption("Version 4.5 | Created by Rohan Potthoff")
+    st.caption("Version 4.6 | Created by Rohan Potthoff")
     st.markdown("""
     <style>
     .social-icons { display: flex; gap: 15px; margin-top: -10px; margin-bottom: 10px; }
@@ -147,6 +162,7 @@ def render_header():
 def render_sidebar():
     with st.sidebar.expander("📦 Version History", expanded=False):
         st.markdown("""
+        - **v4.6**: Fixed cryptocurrency data handling and timezone consistency
         - **v4.5**: Fixed timezone handling and yfinance data type issues
         - **v4.4**: Comprehensive error handling, crypto support, stability fixes
         - **v4.3**: Timezone corrections and performance optimizations
@@ -246,21 +262,28 @@ def main():
                     # Store performance data with proper error handling
                     try:
                         if not portfolio_history.empty:
-                            # Ensure Date column is properly formatted for merging
-                            if isinstance(hist["Date"].iloc[0], pd.Timestamp):
-                                # Convert both to the same format to ensure proper merging
-                                if not isinstance(portfolio_history["Date"].iloc[0], pd.Timestamp):
-                                    portfolio_history["Date"] = pd.to_datetime(portfolio_history["Date"])
+                            # Create copies to avoid modifying original data
+                            hist_copy = hist[["Date", "Normalized"]].copy()
+                            portfolio_copy = portfolio_history.copy()
                             
-                            portfolio_history = portfolio_history.merge(
-                                hist[["Date", "Normalized"]],
-                                on="Date",
-                                how="outer"
-                            ).rename(columns={"Normalized": ticker})
+                            # Ensure both Date columns are timezone-naive datetime objects
+                            hist_copy["Date"] = pd.to_datetime(hist_copy["Date"]).dt.tz_localize(None)
+                            portfolio_copy["Date"] = pd.to_datetime(portfolio_copy["Date"]).dt.tz_localize(None)
+                            
+                            # Use pd.concat instead of merge for more robust handling of different datetime formats
+                            hist_copy = hist_copy.rename(columns={"Normalized": ticker})
+                            combined = pd.concat([portfolio_copy, hist_copy], ignore_index=True)
+                            
+                            # Remove duplicates if any (based on Date)
+                            combined = combined.drop_duplicates(subset=["Date"], keep="first")
+                            
+                            portfolio_history = combined
                         else:
                             portfolio_history = hist[["Date", "Normalized"]].rename(columns={"Normalized": ticker})
+                            # Ensure Date is timezone-naive
+                            portfolio_history["Date"] = pd.to_datetime(portfolio_history["Date"]).dt.tz_localize(None)
                     except Exception as e:
-                        st.warning(f"Error merging performance data for {ticker}: {str(e)}")
+                        st.warning(f"Error processing performance data for {ticker}: {str(e)}")
                         continue
 
                     # Get stock info
@@ -302,12 +325,15 @@ def main():
                 st.subheader("📊 Performance Comparison")
                 # Handle portfolio normalization with proper error handling
                 try:
-                    # Convert Date to datetime if it's not already
-                    if not pd.api.types.is_datetime64_any_dtype(portfolio_history['Date']):
-                        portfolio_history['Date'] = pd.to_datetime(portfolio_history['Date'])
+                    # Ensure Date column is properly formatted
+                    portfolio_history['Date'] = pd.to_datetime(portfolio_history['Date']).dt.tz_localize(None)
+                    
+                    # Drop any rows with NaN Date values
+                    portfolio_history = portfolio_history.dropna(subset=['Date'])
                     
                     # Set index and calculate mean, handling NaN values properly
-                    portfolio_mean = portfolio_history.set_index('Date').mean(axis=1, skipna=True)
+                    numeric_cols = [col for col in portfolio_history.columns if col != 'Date']
+                    portfolio_mean = portfolio_history.set_index('Date')[numeric_cols].mean(axis=1, skipna=True)
                     
                     # Create a new dataframe with the results
                     portfolio_norm = pd.DataFrame({
@@ -318,15 +344,29 @@ def main():
                     portfolio_norm["Index"] = "My Portfolio"
                 except Exception as e:
                     st.error(f"Error calculating portfolio performance: {str(e)}")
+                    st.error(f"Details: {str(e)}")
                     portfolio_norm = pd.DataFrame(columns=["Date", "Normalized", "Index"])
 
+                # Process benchmark data
                 bench_dfs = []
                 for b in benchmark_series:
-                    bench_df = pd.DataFrame(b["data"])
-                    bench_df["Index"] = b["label"]
-                    bench_dfs.append(bench_df)
+                    try:
+                        bench_df = pd.DataFrame(b["data"])
+                        # Ensure Date is timezone-naive for consistent concatenation
+                        bench_df["Date"] = pd.to_datetime(bench_df["Date"]).dt.tz_localize(None)
+                        bench_df["Index"] = b["label"]
+                        bench_dfs.append(bench_df)
+                    except Exception as e:
+                        st.warning(f"Error processing benchmark {b['label']}: {str(e)}")
                 
-                combined = pd.concat([portfolio_norm] + bench_dfs)
+                # Combine portfolio and benchmark data
+                try:
+                    combined = pd.concat([portfolio_norm] + bench_dfs, ignore_index=True)
+                    # Sort by Date for proper visualization
+                    combined = combined.sort_values("Date")
+                except Exception as e:
+                    st.error(f"Error combining performance data: {str(e)}")
+                    combined = pd.DataFrame(columns=["Date", "Normalized", "Index"])
 
                 fig = px.line(
                     combined,
