@@ -14,10 +14,159 @@ import logging
 logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
 # Import custom modules
-from timezone_handler import timezone_handler
-from asset_classifier import asset_classifier
+try:
+    from timezone_handler import timezone_handler
+except ImportError:
+    # Create a simple timezone handler if the module is not available
+    import pytz
+    import datetime
+    
+    class SimpleTimezoneHandler:
+        """Simple timezone handler for fallback"""
+        US_HOLIDAYS = [
+            # 2024 US Market Holidays
+            datetime.date(2024, 1, 1),    # New Year's Day
+            datetime.date(2024, 1, 15),   # Martin Luther King Jr. Day
+            datetime.date(2024, 2, 19),   # Presidents' Day
+            datetime.date(2024, 3, 29),   # Good Friday
+            datetime.date(2024, 5, 27),   # Memorial Day
+            datetime.date(2024, 6, 19),   # Juneteenth
+            datetime.date(2024, 7, 4),    # Independence Day
+            datetime.date(2024, 9, 2),    # Labor Day
+            datetime.date(2024, 11, 28),  # Thanksgiving Day
+            datetime.date(2024, 12, 25),  # Christmas Day
+            # 2025 US Market Holidays
+            datetime.date(2025, 1, 1),    # New Year's Day
+            datetime.date(2025, 1, 20),   # Martin Luther King Jr. Day
+            datetime.date(2025, 2, 17),   # Presidents' Day
+            datetime.date(2025, 4, 18),   # Good Friday
+            datetime.date(2025, 5, 26),   # Memorial Day
+            datetime.date(2025, 6, 19),   # Juneteenth
+            datetime.date(2025, 7, 4),    # Independence Day
+            datetime.date(2025, 9, 1),    # Labor Day
+            datetime.date(2025, 11, 27),  # Thanksgiving Day
+            datetime.date(2025, 12, 25),  # Christmas Day
+        ]
+        
+        def __init__(self):
+            self.user_timezone = pytz.timezone("America/New_York")
+            
+        def get_user_timezone(self):
+            return self.user_timezone
+            
+        def get_market_timezone(self, market=None):
+            return pytz.timezone("America/New_York")
+            
+        def now(self):
+            return datetime.datetime.now(self.user_timezone)
+            
+        def get_market_status_display(self):
+            return "Market status unavailable"
+    
+    # Create a fallback instance
+    timezone_handler = SimpleTimezoneHandler()
+    st.warning("Using simplified timezone handling due to missing timezone_handler module")
+
+try:
+    from asset_classifier import asset_classifier
+except ImportError:
+    # Create a simple asset classifier if the module is not available
+    class SimpleAssetClassifier:
+        """Simple asset classifier for fallback"""
+        def __init__(self):
+            self.cache = {}
+            
+        def classify(self, ticker):
+            """Simple classification based on ticker patterns"""
+            if ticker in self.cache:
+                return self.cache[ticker]
+                
+            result = {
+                "asset_class": "Stock",  # Default to Stock
+                "sector": "Unknown",
+                "industry": "Unknown",
+                "description": "",
+                "confidence": 0.5
+            }
+            
+            # Simple pattern matching
+            if "XX" in ticker or ticker in ["WMPXX", "FNSXX", "VMFXX"]:
+                result["asset_class"] = "Money Market"
+            elif ticker.startswith("^"):
+                result["asset_class"] = "Index"
+            elif "-USD" in ticker or "-EUR" in ticker:
+                result["asset_class"] = "Cryptocurrency"
+            elif ticker in ["SPY", "QQQ", "DIA", "IWM", "EEM", "VTI", "CLOU", "KBE", "QQQJ", "SIXG"]:
+                result["asset_class"] = "ETF"
+                
+            # Cache the result
+            self.cache[ticker] = result
+            return result
+    
+    # Create a fallback instance
+    asset_classifier = SimpleAssetClassifier()
+    st.warning("Using simplified asset classification due to missing asset_classifier module")
+
+try:
+    from visualization_helper import visualization_helper
+except ImportError:
+    # Create a simple visualization helper if the module is not available
+    import plotly.express as px
+    import plotly.graph_objects as go
+    
+    class SimpleVisualizationHelper:
+        """Simple visualization helper for fallback"""
+        def __init__(self):
+            self.color_map = {
+                "My Portfolio": "#1f77b4",
+                "S&P 500": "#ff7f0e",
+                "Nasdaq 100": "#2ca02c",
+                "Euro Stoxx 50": "#d62728"
+            }
+            self.default_height = 500
+            
+        def create_performance_chart(self, portfolio_data, benchmark_data, period, show_absolute=False, height=None):
+            """Create a simple performance chart"""
+            fig = go.Figure()
+            fig.add_annotation(
+                text="Performance chart unavailable",
+                xref="paper",
+                yref="paper",
+                x=0.5,
+                y=0.5,
+                showarrow=False,
+                font=dict(size=16)
+            )
+            return fig
+            
+        def create_allocation_chart(self, data, group_by, title=None, height=None, show_values=True):
+            """Create a simple allocation chart"""
+            fig = go.Figure()
+            fig.add_annotation(
+                text="Allocation chart unavailable",
+                xref="paper",
+                yref="paper",
+                x=0.5,
+                y=0.5,
+                showarrow=False,
+                font=dict(size=16)
+            )
+            return fig
+            
+        def render_chart(self, fig, use_container_width=True):
+            """Render a chart in Streamlit"""
+            st.plotly_chart(fig, use_container_width=use_container_width)
+            
+        def render_metrics(self, portfolio_value, portfolio_change, benchmark_values, columns=None):
+            """Render performance metrics"""
+            st.metric("My Portfolio", f"${portfolio_value:,.2f}", f"{portfolio_change:.2f}%")
+            for label, value in benchmark_values.items():
+                st.metric(label, "", f"{value:.2f}%")
+    
+    # Create a fallback instance
+    visualization_helper = SimpleVisualizationHelper()
+    st.warning("Using simplified visualizations due to missing visualization_helper module")
 from visualization_helper import visualization_helper
 
 # ==============================================
