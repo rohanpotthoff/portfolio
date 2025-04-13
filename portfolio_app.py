@@ -274,6 +274,27 @@ def fetch_market_data(label, symbol, period):
         if period == "1d" and not (is_crypto or is_otc):
             market_open, market_close = get_market_times()
             
+            # Check if today is a weekend or holiday
+            now = timezone_handler.now()
+            today = now.date()
+            is_weekend = today.weekday() >= 5  # Saturday or Sunday
+            is_holiday = today in timezone_handler.US_HOLIDAYS
+            
+            # For weekend or holiday, use a longer period to get recent data
+            if is_weekend or is_holiday:
+                logger.info(f"Today is a {'weekend' if is_weekend else 'holiday'}, using recent data for {symbol}")
+                # Get data for the last 7 days to ensure we have enough data
+                hist = ticker.history(period="7d")
+                
+                if not hist.empty:
+                    # Keep only the most recent trading day's data
+                    hist = hist.iloc[-1:] if len(hist) > 0 else hist
+                    return {
+                        "data": hist.reset_index().rename(columns={'index': 'Date', 'Datetime': 'Date'})[["Date", "Close"]].assign(Normalized=0.0),
+                        "pct_change": 0.0,
+                        "label": label
+                    }
+            
             # European market adjustment
             if is_european:
                 # For Euro Stoxx 50 and other European markets, use a different approach
@@ -874,23 +895,43 @@ def main():
                             portfolio_mean = pd.Series([0.0, portfolio_pct],
                                                       index=[current_time - datetime.timedelta(hours=1), current_time])
                         else:
-                            # Calculate mean performance with proper error handling
+                            # Calculate mean performance with robust error handling
                             try:
-                                portfolio_mean = portfolio_history_indexed[numeric_cols].mean(axis=1, skipna=True)
+                                # First check if we have any valid numeric data
+                                valid_data = portfolio_history_indexed[numeric_cols].dropna(how='all')
                                 
-                                # Ensure portfolio_mean is not empty and contains valid data
-                                if portfolio_mean.empty or portfolio_mean.isna().all():
-                                    st.warning("Portfolio performance data is empty or contains only NaN values.")
-                                    # Create a simple DataFrame with the portfolio percentage change
-                                    current_time = timezone_handler.now()
-                                    portfolio_mean = pd.Series([0.0, portfolio_pct],
-                                                              index=[current_time - datetime.timedelta(hours=1), current_time])
+                                if not valid_data.empty:
+                                    # Use only columns with valid data
+                                    valid_cols = [col for col in numeric_cols if not valid_data[col].isna().all()]
+                                    
+                                    if valid_cols:
+                                        portfolio_mean = valid_data[valid_cols].mean(axis=1, skipna=True)
+                                        
+                                        # Final check for valid data
+                                        if portfolio_mean.empty or portfolio_mean.isna().all():
+                                            raise ValueError("No valid data after processing")
+                                    else:
+                                        raise ValueError("No valid columns found")
+                                else:
+                                    raise ValueError("No valid data rows found")
+                                    
                             except Exception as e:
-                                st.warning(f"Error calculating portfolio mean: {str(e)}")
+                                logger.warning(f"Error calculating portfolio mean: {str(e)}")
+                                st.warning("Portfolio performance data is empty or contains only NaN values. Using estimated values.")
+                                
                                 # Create a simple DataFrame with the portfolio percentage change
+                                # Use two points to show some movement rather than a flat line
                                 current_time = timezone_handler.now()
-                                portfolio_mean = pd.Series([0.0, portfolio_pct],
-                                                          index=[current_time - datetime.timedelta(hours=1), current_time])
+                                one_hour_ago = current_time - datetime.timedelta(hours=1)
+                                
+                                # Create a series with a slight slope to show some movement
+                                start_value = 0.0
+                                end_value = portfolio_pct
+                                
+                                portfolio_mean = pd.Series(
+                                    [start_value, end_value],
+                                    index=[one_hour_ago, current_time]
+                                )
                         
                         # Add absolute portfolio value if available
                         if show_absolute:
@@ -951,20 +992,31 @@ def main():
                     # Sector Allocation
                     # Ensure df has the required columns
                     if "Sector" not in df.columns:
-                        # Add Sector if missing
-                        df["Sector"] = "Unknown"
-                        st.warning("Missing sector data. Using 'Unknown' as default.")
-                    
-                    # Create the chart with error handling
-                    try:
-                        sector_fig = visualization_helper.create_allocation_chart(
-                            df,
-                            "Sector",
-                            "Sector Allocation"
+                        # Add Sector from asset_classifier if missing
+                        df["Sector"] = df["Ticker"].apply(
+                            lambda x: asset_classifier.classify(x).get("sector", "Unknown")
                         )
-                        visualization_helper.render_chart(sector_fig, key="sector_chart")
+                        # Check if we still have unknown sectors
+                        if (df["Sector"] == "Unknown").all():
+                            st.warning("Missing sector data. Using 'Unknown' as default.")
+                    
+                    # Create the chart with robust error handling
+                    try:
+                        # Check if we have any non-Unknown sectors
+                        if df["Sector"].nunique() > 1 or df["Sector"].iloc[0] != "Unknown":
+                            sector_fig = visualization_helper.create_allocation_chart(
+                                df,
+                                "Sector",
+                                "Sector Allocation"
+                            )
+                            visualization_helper.render_chart(sector_fig, key="sector_chart")
+                        else:
+                            # Create a placeholder message instead of a chart
+                            st.info("Sector allocation chart not available - all sectors are unknown.")
                     except Exception as e:
                         st.error(f"Error creating Sector chart: {str(e)}")
+                        # Log the error for debugging
+                        logger.error(f"Critical error in Sector chart: {str(e)}")
 
             # Portfolio Insights
             st.subheader("🧠 Portfolio Insights")
