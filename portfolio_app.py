@@ -623,6 +623,10 @@ def main():
             portfolio_history = pd.DataFrame()
             portfolio_start_value = 0
             portfolio_end_value = 0
+            
+            # Create dictionaries to store performance data by ticker
+            ticker_performance = {}
+            ticker_weights = {}
 
             # First pass: Calculate portfolio value
             portfolio_start_value = 0
@@ -708,47 +712,35 @@ def main():
                     portfolio_start_value += qty * start_price
                     portfolio_end_value += qty * current_price
                     
-                    # Store performance data with proper error handling
+                    # Calculate ticker weight for performance weighting
+                    ticker_weight = (qty * current_price) / portfolio_end_value if portfolio_end_value > 0 else 0
+                    ticker_weights[ticker] = ticker_weight
+                    
+                    # Store performance data in a simplified format
                     try:
-                        if 'Date' in hist.columns and 'Normalized' in hist.columns:
-                            # Ensure Normalized column is numeric
-                            if not pd.api.types.is_numeric_dtype(hist['Normalized']):
-                                hist['Normalized'] = pd.to_numeric(hist['Normalized'], errors='coerce')
-                                
-                            hist_copy = hist[["Date", "Normalized"]].copy()
+                        if 'Date' in hist.columns and 'Close' in hist.columns:
+                            # Create normalized performance data for this ticker
+                            hist_copy = hist[["Date", "Close"]].copy()
                             
-                            # Ensure Date is a proper datetime - handle both Series and DatetimeIndex
-                            if isinstance(hist_copy["Date"], pd.DatetimeIndex):
-                                # Convert DatetimeIndex to regular datetime Series
-                                hist_copy["Date"] = pd.Series(hist_copy["Date"].to_pydatetime())
-                            else:
-                                # For regular Series, use pd.to_datetime with error handling
-                                hist_copy["Date"] = pd.to_datetime(hist_copy["Date"], errors='coerce')
-                                
+                            # Ensure Date is a proper datetime
+                            hist_copy["Date"] = pd.to_datetime(hist_copy["Date"], errors='coerce')
+                            
                             # Drop any rows with NaT dates
                             hist_copy = hist_copy.dropna(subset=["Date"])
                             
-                            # Standardize timezone info to user timezone
-                            user_tz = timezone_handler.get_user_timezone()
-                            hist_copy["Date"] = hist_copy["Date"].apply(
-                                lambda x: x.astimezone(user_tz) if hasattr(x, 'tzinfo') and x.tzinfo is not None else
-                                          x.replace(tzinfo=user_tz) if hasattr(x, 'tzinfo') else x
-                            )
-                            
-                            if not portfolio_history.empty:
-                                # Create a copy to avoid modifying original data
-                                portfolio_copy = portfolio_history.copy()
+                            # Calculate normalized performance (percentage change from start)
+                            if not hist_copy.empty and hist_copy["Close"].iloc[0] > 0:
+                                base_price = hist_copy["Close"].iloc[0]
+                                hist_copy["Normalized"] = ((hist_copy["Close"] / base_price) - 1) * 100
                                 
-                                # Ensure both Date columns are proper datetime objects
-                                if isinstance(portfolio_copy["Date"], pd.DatetimeIndex):
-                                    # Convert DatetimeIndex to regular datetime Series
-                                    portfolio_copy["Date"] = pd.Series(portfolio_copy["Date"].to_pydatetime())
-                                else:
-                                    # For regular Series, use pd.to_datetime with error handling
-                                    portfolio_copy["Date"] = pd.to_datetime(portfolio_copy["Date"], errors='coerce')
-                                    
-                                # Drop any rows with NaT dates
-                                portfolio_copy = portfolio_copy.dropna(subset=["Date"])
+                                # Store in ticker_performance dictionary
+                                ticker_performance[ticker] = {
+                                    "data": hist_copy,
+                                    "weight": ticker_weight,
+                                    "quantity": qty
+                                }
+                            else:
+                                logger.warning(f"Empty or invalid performance data for {ticker}")
                                 
                                 # Standardize timezone info to user timezone
                                 user_tz = timezone_handler.get_user_timezone()
@@ -812,8 +804,6 @@ def main():
                                         portfolio_history = combined
                                     except Exception as e2:
                                         st.error(f"Failed alternative merge for {ticker}: {str(e2)}")
-                            else:
-                                portfolio_history = hist_copy.rename(columns={"Normalized": ticker})
                     except Exception as e:
                         st.warning(f"Error processing performance data for {ticker}: {str(e)}")
                         continue
@@ -899,22 +889,97 @@ def main():
                     st.metric(label, "", f"{value:.2f}%", delta_color=delta_color)
 
             # Performance Visualization with enhanced charts
-            if not portfolio_history.empty:
-                st.subheader("📊 Performance Comparison")
-                
-                # Handle portfolio normalization with proper error handling
-                try:
-                    # Clean up the portfolio history data
-                    portfolio_history = portfolio_history.copy()
+            st.subheader("📊 Performance Comparison")
+            
+            # Calculate weighted portfolio performance using ticker_performance data
+            # Create enhanced visualization with improved error handling
+            try:
+                # Check if we have performance data
+                if ticker_performance:
+                    # Create a common date range for all tickers
+                    all_dates = set()
+                    for ticker_data in ticker_performance.values():
+                        if "data" in ticker_data and not ticker_data["data"].empty:
+                            all_dates.update(ticker_data["data"]["Date"].tolist())
                     
-                    # Ensure Date column is properly formatted
-                    portfolio_history["Date"] = pd.to_datetime(portfolio_history["Date"])
+                    # Convert to sorted list
+                    all_dates = sorted(all_dates)
                     
-                    # Drop any rows with NaN Date values
-                    portfolio_history = portfolio_history.dropna(subset=['Date'])
-                    
-                    # Get numeric columns (excluding Date)
-                    numeric_cols = [col for col in portfolio_history.columns if col != 'Date']
+                    if all_dates:
+                        # Create a DataFrame with all dates
+                        portfolio_performance = pd.DataFrame({"Date": all_dates})
+                        
+                        # Add weighted performance for each ticker
+                        total_weight = sum(data["weight"] for data in ticker_performance.values())
+                        
+                        # Normalize weights if total is not 1.0
+                        if total_weight > 0:
+                            for ticker, data in ticker_performance.items():
+                                data["normalized_weight"] = data["weight"] / total_weight
+                        else:
+                            # Equal weights if we can't calculate proper weights
+                            equal_weight = 1.0 / len(ticker_performance) if ticker_performance else 0
+                            for ticker, data in ticker_performance.items():
+                                data["normalized_weight"] = equal_weight
+                        
+                        # Merge each ticker's performance data
+                        for ticker, data in ticker_performance.items():
+                            if "data" in data and not data["data"].empty:
+                                # Rename the Normalized column to include the ticker
+                                ticker_df = data["data"].copy()
+                                ticker_df = ticker_df.rename(columns={"Normalized": f"{ticker}_norm"})
+                                
+                                # Merge with the portfolio performance DataFrame
+                                portfolio_performance = pd.merge(
+                                    portfolio_performance,
+                                    ticker_df[["Date", f"{ticker}_norm"]],
+                                    on="Date",
+                                    how="left"
+                                )
+                                
+                                # Fill NaN values with forward fill then backward fill
+                                portfolio_performance[f"{ticker}_norm"] = portfolio_performance[f"{ticker}_norm"].ffill().bfill()
+                        
+                        # Calculate weighted average performance
+                        portfolio_performance["Portfolio"] = 0.0
+                        for ticker, data in ticker_performance.items():
+                            col_name = f"{ticker}_norm"
+                            if col_name in portfolio_performance.columns:
+                                weight = data["normalized_weight"]
+                                portfolio_performance["Portfolio"] += portfolio_performance[col_name] * weight
+                        
+                        # Create a Series for visualization
+                        portfolio_mean = pd.Series(
+                            portfolio_performance["Portfolio"].values,
+                            index=portfolio_performance["Date"]
+                        )
+                        
+                        # Create enhanced visualization
+                        try:
+                            # Validate portfolio_mean data
+                            if portfolio_mean.empty:
+                                st.warning("Portfolio performance data is empty. Cannot create chart.")
+                                fig = visualization_helper._create_empty_chart("No portfolio performance data available")
+                            elif portfolio_mean.isna().all():
+                                st.warning("Portfolio performance data contains only NaN values. Cannot create chart.")
+                                fig = visualization_helper._create_empty_chart("Portfolio data contains only NaN values")
+                            else:
+                                # Check if benchmark_series is valid
+                                valid_benchmarks = [b for b in benchmark_series if b is not None]
+                                
+                                # Create the chart
+                                fig = visualization_helper.create_performance_chart(
+                                    portfolio_mean,
+                                    valid_benchmarks,
+                                    period,
+                                    show_absolute=show_absolute
+                                )
+                        except Exception as e:
+                            st.error(f"Error creating performance chart: {str(e)}")
+                            fig = visualization_helper._create_empty_chart(f"Error creating chart: {str(e)}")
+                            
+                        # Render the chart with a unique key
+                        visualization_helper.render_chart(fig, key="performance_chart")
                     
                     # Fill NaN values with forward fill then backward fill
                     for col in numeric_cols:
@@ -1031,9 +1096,9 @@ def main():
                         visualization_helper.render_chart(fig, key="performance_chart")
                     else:
                         st.warning("Insufficient data for performance visualization")
-                except Exception as e:
-                    st.error(f"Error calculating portfolio performance: {str(e)}")
-                    st.error(f"Details: {str(e)}")
+            except Exception as e:
+                st.error(f"Error calculating portfolio performance: {str(e)}")
+                st.error(f"Details: {str(e)}")
                 
                 # Asset Allocation Analysis
                 st.subheader("📊 Asset Allocation Analysis")
