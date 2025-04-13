@@ -130,23 +130,35 @@ def fetch_market_data(label, symbol, period):
                 if "^STOXX" in symbol:
                     # Use a longer period for Euro Stoxx 50 to ensure we get data
                     try:
-                        # Get data for the last 3 days to ensure we have enough data
-                        hist = ticker.history(period="3d")
+                        # Get data for the last 7 days to ensure we have enough data
+                        hist = ticker.history(period="7d")
                         
                         # Filter to just today's data if available, using proper timezone
                         user_tz = timezone_handler.get_user_timezone()
                         today = timezone_handler.now().date()
                         
-                        if not hist.empty and isinstance(hist.index[0], pd.Timestamp):
-                            # Convert index dates to user timezone before comparing
-                            hist_dates = pd.Series([ts.astimezone(user_tz).date() for ts in hist.index])
-                            hist = hist[hist_dates == today]
-                            
+                        if not hist.empty and len(hist.index) > 0:
+                            # Safely handle index conversion
+                            try:
+                                if isinstance(hist.index[0], pd.Timestamp):
+                                    # Convert index dates to user timezone before comparing
+                                    hist_dates = pd.Series([
+                                        ts.astimezone(user_tz).date() if ts.tzinfo is not None
+                                        else ts.replace(tzinfo=pytz.UTC).astimezone(user_tz).date()
+                                        for ts in hist.index
+                                    ])
+                                    # Use boolean indexing safely
+                                    valid_dates = hist_dates == today
+                                    if any(valid_dates):
+                                        hist = hist.loc[valid_dates]
+                            except Exception as e:
+                                logger.warning(f"Error filtering Euro Stoxx 50 data: {str(e)}")
+                        
                         # If still empty, use all data
                         if hist.empty:
                             hist = ticker.history(period=period)
                     except Exception as e:
-                        st.warning(f"Error fetching Euro Stoxx 50 data: {str(e)}")
+                        logger.warning(f"Error fetching Euro Stoxx 50 data: {str(e)}")
                         hist = ticker.history(period=period)
                 else:
                     # Other European markets
@@ -682,20 +694,39 @@ def main():
                     # Add validation to prevent division by zero
                     if not portfolio_history_indexed.empty and len(numeric_cols) > 0:
                         # Calculate mean performance
-                        portfolio_mean = portfolio_history_indexed[numeric_cols].mean(axis=1, skipna=True)
-                        
-                        # Ensure portfolio_mean is not empty and contains valid data
-                        if portfolio_mean.empty or portfolio_mean.isna().all():
-                            st.warning("Portfolio performance data is empty or contains only NaN values.")
+                        # First check if there are any numeric columns
+                        if len(numeric_cols) == 0:
+                            st.warning("No numeric columns found in portfolio history data.")
                             # Create a simple DataFrame with the portfolio percentage change
                             current_time = timezone_handler.now()
                             portfolio_mean = pd.Series([0.0, portfolio_pct],
                                                       index=[current_time - datetime.timedelta(hours=1), current_time])
+                        else:
+                            # Calculate mean performance with proper error handling
+                            try:
+                                portfolio_mean = portfolio_history_indexed[numeric_cols].mean(axis=1, skipna=True)
+                                
+                                # Ensure portfolio_mean is not empty and contains valid data
+                                if portfolio_mean.empty or portfolio_mean.isna().all():
+                                    st.warning("Portfolio performance data is empty or contains only NaN values.")
+                                    # Create a simple DataFrame with the portfolio percentage change
+                                    current_time = timezone_handler.now()
+                                    portfolio_mean = pd.Series([0.0, portfolio_pct],
+                                                              index=[current_time - datetime.timedelta(hours=1), current_time])
+                            except Exception as e:
+                                st.warning(f"Error calculating portfolio mean: {str(e)}")
+                                # Create a simple DataFrame with the portfolio percentage change
+                                current_time = timezone_handler.now()
+                                portfolio_mean = pd.Series([0.0, portfolio_pct],
+                                                          index=[current_time - datetime.timedelta(hours=1), current_time])
                         
                         # Add absolute portfolio value if available
                         if show_absolute:
                             # Calculate absolute values based on portfolio weights
-                            portfolio_history_indexed["Value"] = portfolio_end_value
+                            try:
+                                portfolio_history_indexed["Value"] = portfolio_end_value
+                            except Exception as e:
+                                st.warning(f"Error adding absolute value: {str(e)}")
                         
                         # Create enhanced visualization
                         fig = visualization_helper.create_performance_chart(
@@ -726,100 +757,194 @@ def main():
                 
                 with col1:
                     # Asset Class Allocation
-                    asset_class_fig = visualization_helper.create_allocation_chart(
-                        df,
-                        "Asset Class",
-                        "Asset Class Allocation"
-                    )
-                    visualization_helper.render_chart(asset_class_fig)
+                    # Ensure df has the required columns
+                    if "Asset Class" not in df.columns:
+                        # Add Asset Class if missing
+                        df["Asset Class"] = df["Ticker"].apply(
+                            lambda x: asset_classifier.classify(x)["asset_class"]
+                        )
+                    
+                    # Create the chart with error handling
+                    try:
+                        asset_class_fig = visualization_helper.create_allocation_chart(
+                            df,
+                            "Asset Class",
+                            "Asset Class Allocation"
+                        )
+                        visualization_helper.render_chart(asset_class_fig)
+                    except Exception as e:
+                        st.error(f"Error creating Asset Class chart: {str(e)}")
                     
                 with col2:
                     # Sector Allocation
-                    sector_fig = visualization_helper.create_allocation_chart(
-                        df,
-                        "Sector",
-                        "Sector Allocation"
-                    )
-                    visualization_helper.render_chart(sector_fig)
+                    # Ensure df has the required columns
+                    if "Sector" not in df.columns:
+                        # Add Sector if missing
+                        df["Sector"] = "Unknown"
+                        st.warning("Missing sector data. Using 'Unknown' as default.")
+                    
+                    # Create the chart with error handling
+                    try:
+                        sector_fig = visualization_helper.create_allocation_chart(
+                            df,
+                            "Sector",
+                            "Sector Allocation"
+                        )
+                        visualization_helper.render_chart(sector_fig)
+                    except Exception as e:
+                        st.error(f"Error creating Sector chart: {str(e)}")
 
             # Portfolio Insights
             st.subheader("🧠 Portfolio Insights")
             insights = []
             
             if portfolio_end_value > 0:
-                # Merge price data
-                price_df = pd.DataFrame(price_data)
-                df = df.merge(price_df, on="Ticker")
-                df["Market Value"] = df["Quantity"] * df["Current Price"]
-                df["Weight"] = df["Market Value"] / portfolio_end_value
-
-                # Concentration risk
-                heavy = df[df.Weight > 0.1]
-                for _, row in heavy.iterrows():
-                    insights.append(f"⚠️ **{row.Ticker}** ({row.Weight:.1%}) exceeds 10% allocation")
-
-                # Cash position
-                cash = df[df["Asset Class"] == "Money Market"]["Market Value"].sum()
-                cash_pct = cash / portfolio_end_value
-                if cash_pct > 0.15:
-                    insights.append(f"🪙 Cash allocation ({cash_pct:.1%}) may create drag")
-
-                # Big movers
-                for _, row in df.iterrows():
-                    if row["Asset Class"] == "Money Market":
-                        continue
-                    try:
-                        result = fetch_market_data(row.Ticker, row.Ticker, period)
-                        if result and "pct_change" in result:
-                            change = result["pct_change"]
-                            if change <= -10:
-                                insights.append(f"🔻 **{row.Ticker}** dropped {abs(change):.1f}%")
-                            elif change >= 20:
-                                insights.append(f"🚀 **{row.Ticker}** gained {change:.1f}%")
-                    except Exception:
-                        pass
-
-                # Earnings alerts
-                for ticker in df.Ticker.unique():
-                    # Skip money market funds, ETFs, indices, and crypto
-                    if is_money_market(ticker):
-                        continue
+                try:
+                    # Merge price data with error handling
+                    price_df = pd.DataFrame(price_data)
                     
-                    # Skip ETFs, indices, and crypto that don't have earnings
-                    if any(x in ticker for x in ["RSP", "EEM", "VTI", "CLOU", "KBE", "QQQ", "QQQJ", "SIXG"]) or \
-                       ticker.startswith("^") or "-USD" in ticker or "-EUR" in ticker:
-                        continue
+                    # Check if price_df is empty
+                    if price_df.empty:
+                        st.warning("No price data available. Using default values.")
+                        df["Current Price"] = 1.0  # Default price
+                    else:
+                        # Ensure both dataframes have the Ticker column
+                        if "Ticker" not in df.columns:
+                            st.error("Portfolio data missing Ticker column.")
+                            df["Ticker"] = "Unknown"
                         
-                    try:
-                        cal = yf.Ticker(ticker).calendar
-                        
-                        # Check if calendar exists and has the expected structure
-                        if isinstance(cal, pd.DataFrame) and not cal.empty and 'EarningsDate' in cal.columns:
-                            # Handle different possible data types for earnings date
-                            earnings_date = cal.EarningsDate.max()
-                            
-                            if pd.notna(earnings_date):
-                                # Convert to date object safely
-                                if isinstance(earnings_date, pd.Timestamp):
-                                    earnings_date = earnings_date.date()
-                                elif isinstance(earnings_date, datetime.datetime):
-                                    earnings_date = earnings_date.date()
-                                elif isinstance(earnings_date, str):
-                                    try:
-                                        earnings_date = pd.to_datetime(earnings_date).date()
-                                    except:
-                                        continue
-                                
-                                # Calculate days difference
-                                days = (earnings_date - datetime.date.today()).days
-                                if 0 <= days <= 14:
-                                    insights.append(f"📅 **{ticker}** earnings in {days} days")
-                    except Exception as e:
-                        # Silently ignore 404 errors for ETFs and crypto
-                        if "404" in str(e):
+                        if "Ticker" not in price_df.columns:
+                            st.error("Price data missing Ticker column.")
+                            # Skip the merge if Ticker column is missing
                             pass
                         else:
-                            st.warning(f"Error fetching earnings for {ticker}: {str(e)}")
+                            # Perform the merge with error handling
+                            df = df.merge(price_df, on="Ticker", how="left")
+                        
+                        # Fill missing values
+                        if "Current Price" not in df.columns:
+                            df["Current Price"] = 1.0
+                        else:
+                            df["Current Price"] = df["Current Price"].fillna(1.0)
+                    
+                    # Calculate Market Value and Weight
+                    df["Market Value"] = df["Quantity"] * df["Current Price"]
+                    df["Weight"] = df["Market Value"] / portfolio_end_value
+                    
+                except Exception as e:
+                    st.error(f"Error processing portfolio data: {str(e)}")
+                    # Create default columns to prevent further errors
+                    if "Market Value" not in df.columns:
+                        df["Market Value"] = df["Quantity"] * 1.0
+                    if "Weight" not in df.columns:
+                        df["Weight"] = 1.0 / len(df) if len(df) > 0 else 1.0
+
+                # Concentration risk with proper error handling
+                try:
+                    # Ensure Weight column exists and is numeric
+                    if "Weight" in df.columns:
+                        # Convert to numeric with error handling
+                        df["Weight"] = pd.to_numeric(df["Weight"], errors="coerce")
+                        
+                        # Use boolean indexing safely
+                        weight_filter = df["Weight"] > 0.1
+                        if not weight_filter.empty:
+                            heavy = df[weight_filter]
+                            for _, row in heavy.iterrows():
+                                if "Ticker" in row and "Weight" in row and pd.notna(row["Weight"]):
+                                    insights.append(f"⚠️ **{row.Ticker}** ({row.Weight:.1%}) exceeds 10% allocation")
+                except Exception as e:
+                    st.warning(f"Error analyzing concentration risk: {str(e)}")
+
+                # Cash position with proper error handling
+                try:
+                    if "Asset Class" in df.columns and "Market Value" in df.columns:
+                        # Use boolean indexing safely
+                        cash_filter = df["Asset Class"] == "Money Market"
+                        if not cash_filter.empty:
+                            cash = df[cash_filter]["Market Value"].sum()
+                            cash_pct = cash / portfolio_end_value if portfolio_end_value > 0 else 0
+                            if cash_pct > 0.15:
+                                insights.append(f"🪙 Cash allocation ({cash_pct:.1%}) may create drag")
+                except Exception as e:
+                    st.warning(f"Error analyzing cash position: {str(e)}")
+
+                # Big movers with improved error handling
+                try:
+                    for _, row in df.iterrows():
+                        # Skip money market funds and ensure Asset Class exists
+                        if "Asset Class" not in row or row.get("Asset Class") == "Money Market":
+                            continue
+                        
+                        # Ensure Ticker exists
+                        if "Ticker" not in row:
+                            continue
+                            
+                        try:
+                            result = fetch_market_data(row.Ticker, row.Ticker, period)
+                            if result and "pct_change" in result:
+                                change = result["pct_change"]
+                                # Ensure change is a valid number
+                                if pd.isna(change) or not np.isfinite(change):
+                                    continue
+                                    
+                                if change <= -10:
+                                    insights.append(f"🔻 **{row.Ticker}** dropped {abs(change):.1f}%")
+                                elif change >= 20:
+                                    insights.append(f"🚀 **{row.Ticker}** gained {change:.1f}%")
+                        except Exception as e:
+                            logger.warning(f"Error processing big mover {row.get('Ticker', 'Unknown')}: {str(e)}")
+                except Exception as e:
+                    st.warning(f"Error analyzing big movers: {str(e)}")
+
+                # Earnings alerts with improved error handling
+                try:
+                    # Ensure df has Ticker column
+                    if "Ticker" not in df.columns:
+                        st.warning("Missing Ticker column for earnings alerts")
+                    else:
+                        for ticker in df.Ticker.unique():
+                            # Skip money market funds, ETFs, indices, and crypto
+                            if is_money_market(ticker):
+                                continue
+                            
+                            # Skip ETFs, indices, and crypto that don't have earnings
+                            if any(x in ticker for x in ["RSP", "EEM", "VTI", "CLOU", "KBE", "QQQ", "QQQJ", "SIXG"]) or \
+                               ticker.startswith("^") or "-USD" in ticker or "-EUR" in ticker:
+                                continue
+                                
+                            try:
+                                cal = yf.Ticker(ticker).calendar
+                                
+                                # Check if calendar exists and has the expected structure
+                                if isinstance(cal, pd.DataFrame) and not cal.empty and 'EarningsDate' in cal.columns:
+                                    # Handle different possible data types for earnings date
+                                    earnings_date = cal.EarningsDate.max()
+                                    
+                                    if pd.notna(earnings_date):
+                                        # Convert to date object safely
+                                        if isinstance(earnings_date, pd.Timestamp):
+                                            earnings_date = earnings_date.date()
+                                        elif isinstance(earnings_date, datetime.datetime):
+                                            earnings_date = earnings_date.date()
+                                        elif isinstance(earnings_date, str):
+                                            try:
+                                                earnings_date = pd.to_datetime(earnings_date).date()
+                                            except:
+                                                continue
+                                        
+                                        # Calculate days difference
+                                        days = (earnings_date - datetime.date.today()).days
+                                        if 0 <= days <= 14:
+                                            insights.append(f"📅 **{ticker}** earnings in {days} days")
+                            except Exception as e:
+                                # Silently ignore 404 errors for ETFs and crypto
+                                if "404" in str(e):
+                                    pass
+                                else:
+                                    logger.warning(f"Error fetching earnings for {ticker}: {str(e)}")
+                except Exception as e:
+                    st.warning(f"Error processing earnings alerts: {str(e)}")
 
             # Display insights
             if insights:

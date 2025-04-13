@@ -230,12 +230,34 @@ class VisualizationHelper:
         if data.empty:
             return self._create_empty_chart("No data available")
             
-        # Group data
-        grouped = data.groupby(group_by, as_index=False)["Market Value"].sum()
-        
-        # Calculate percentages
-        total = grouped["Market Value"].sum()
-        grouped["Percentage"] = grouped["Market Value"] / total * 100
+        # Ensure required columns exist
+        if group_by not in data.columns:
+            return self._create_empty_chart(f"Missing '{group_by}' column")
+            
+        if "Market Value" not in data.columns:
+            return self._create_empty_chart("Missing 'Market Value' column")
+            
+        # Group data with error handling
+        try:
+            # Convert Market Value to numeric to avoid groupby errors
+            data["Market Value"] = pd.to_numeric(data["Market Value"], errors="coerce")
+            
+            # Drop rows with NaN Market Value
+            data = data.dropna(subset=["Market Value"])
+            
+            # Group data
+            grouped = data.groupby(group_by, as_index=False)["Market Value"].sum()
+            
+            # Calculate percentages
+            total = grouped["Market Value"].sum()
+            if total <= 0:
+                return self._create_empty_chart("Total market value is zero or negative")
+                
+            grouped["Percentage"] = grouped["Market Value"] / total * 100
+        except Exception as e:
+            import logging
+            logging.warning(f"Error in create_allocation_chart: {str(e)}")
+            return self._create_empty_chart(f"Error processing data: {str(e)}")
         
         # Create hover text
         if show_values:
