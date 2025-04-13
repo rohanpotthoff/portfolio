@@ -484,9 +484,16 @@ class VisualizationHelper:
         
         return fig
     
-    def render_chart(self, fig: go.Figure, use_container_width: bool = True):
-        """Render a chart in Streamlit"""
-        st.plotly_chart(fig, use_container_width=use_container_width)
+    def render_chart(self, fig: go.Figure, use_container_width: bool = True, key: str = None):
+        """
+        Render a chart in Streamlit
+        
+        Args:
+            fig: Plotly figure to render
+            use_container_width: Whether to use the full container width
+            key: Optional unique key for the chart to avoid duplicate ID errors
+        """
+        st.plotly_chart(fig, use_container_width=use_container_width, key=key)
     
     def render_metrics(
         self, 

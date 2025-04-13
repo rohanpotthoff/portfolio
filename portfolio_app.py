@@ -16,7 +16,8 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 # Import custom modules
 try:
-    from timezone_handler import timezone_handler
+    # Import the timezone_handler instance from the module
+    from timezone_handler import TimezoneHandler, timezone_handler
 except ImportError:
     # Create a simple timezone handler if the module is not available
     import pytz
@@ -516,10 +517,32 @@ def main():
                     st.warning(f"Could not fetch data for {label}")
                     # Add a default value to ensure the benchmark appears in the UI
                     benchmark_values[label] = 0.0
+                    # Create a minimal data series with two points to avoid flat line
+                    current_time = timezone_handler.now()
+                    default_data = pd.DataFrame({
+                        "Date": [current_time - datetime.timedelta(hours=1), current_time],
+                        "Normalized": [0.0, 0.0]
+                    })
+                    benchmark_series.append({
+                        "data": default_data,
+                        "pct_change": 0.0,
+                        "label": label
+                    })
             except Exception as e:
                 st.warning(f"Error fetching {label} data: {str(e)}")
                 # Add a default value to ensure the benchmark appears in the UI
                 benchmark_values[label] = 0.0
+                # Create a minimal data series with two points to avoid flat line
+                current_time = timezone_handler.now()
+                default_data = pd.DataFrame({
+                    "Date": [current_time - datetime.timedelta(hours=1), current_time],
+                    "Normalized": [0.0, 0.0]
+                })
+                benchmark_series.append({
+                    "data": default_data,
+                    "pct_change": 0.0,
+                    "label": label
+                })
 
     # File upload handling
     uploaded_files = st.file_uploader(
@@ -885,8 +908,8 @@ def main():
                             show_absolute=show_absolute
                         )
                         
-                        # Render the chart
-                        visualization_helper.render_chart(fig)
+                        # Render the chart with a unique key
+                        visualization_helper.render_chart(fig, key="performance_chart")
                     else:
                         st.warning("Insufficient data for performance visualization")
                 except Exception as e:
@@ -920,7 +943,7 @@ def main():
                             "Asset Class",
                             "Asset Class Allocation"
                         )
-                        visualization_helper.render_chart(asset_class_fig)
+                        visualization_helper.render_chart(asset_class_fig, key="asset_class_chart")
                     except Exception as e:
                         st.error(f"Error creating Asset Class chart: {str(e)}")
                     
@@ -939,7 +962,7 @@ def main():
                             "Sector",
                             "Sector Allocation"
                         )
-                        visualization_helper.render_chart(sector_fig)
+                        visualization_helper.render_chart(sector_fig, key="sector_chart")
                     except Exception as e:
                         st.error(f"Error creating Sector chart: {str(e)}")
 
