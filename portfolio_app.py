@@ -2,9 +2,23 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import plotly.express as px
+import plotly.graph_objects as go
 import datetime
 import pytz
 from functools import lru_cache
+import numpy as np
+from typing import Dict, List, Optional, Tuple, Union
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO,
+                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Import custom modules
+from timezone_handler import timezone_handler
+from asset_classifier import asset_classifier
+from visualization_helper import visualization_helper
 
 # ==============================================
 # Configuration
@@ -27,40 +41,18 @@ PERIOD_MAP = {
     "6M": "6mo",
     "YTD": "ytd",
     "1Y": "1y",
-    "5Y": "5y"
+    "5Y": "5y",
+    "Max": "max"
 }
-MARKET_TIMEZONE = pytz.timezone("America/New_York")
-US_HOLIDAYS = [
-    # 2024 US Market Holidays
-    datetime.date(2024, 1, 1),    # New Year's Day
-    datetime.date(2024, 1, 15),   # Martin Luther King Jr. Day
-    datetime.date(2024, 2, 19),   # Presidents' Day
-    datetime.date(2024, 3, 29),   # Good Friday
-    datetime.date(2024, 5, 27),   # Memorial Day
-    datetime.date(2024, 6, 19),   # Juneteenth
-    datetime.date(2024, 7, 4),    # Independence Day
-    datetime.date(2024, 9, 2),    # Labor Day
-    datetime.date(2024, 11, 28),  # Thanksgiving Day
-    datetime.date(2024, 12, 25),  # Christmas Day
-    # 2025 US Market Holidays
-    datetime.date(2025, 1, 1),    # New Year's Day
-    datetime.date(2025, 1, 20),   # Martin Luther King Jr. Day
-    datetime.date(2025, 2, 17),   # Presidents' Day
-    datetime.date(2025, 4, 18),   # Good Friday
-    datetime.date(2025, 5, 26),   # Memorial Day
-    datetime.date(2025, 6, 19),   # Juneteenth
-    datetime.date(2025, 7, 4),    # Independence Day
-    datetime.date(2025, 9, 1),    # Labor Day
-    datetime.date(2025, 11, 27),  # Thanksgiving Day
-    datetime.date(2025, 12, 25),  # Christmas Day
-]
 
 # ==============================================
 # Helper Functions
 # ==============================================
 def get_market_times():
     """Get proper market open/close times based on current time, accounting for weekends and holidays"""
-    now = datetime.datetime.now(MARKET_TIMEZONE)
+    # Use the timezone_handler to get the market timezone
+    market_tz = timezone_handler.get_market_timezone("US")
+    now = timezone_handler.now().astimezone(market_tz)
     today = now.date()
     
     # Create base market hours for today
@@ -69,7 +61,7 @@ def get_market_times():
     
     # Check if today is a weekend or holiday
     is_weekend = now.weekday() >= 5  # Saturday or Sunday
-    is_holiday = today in US_HOLIDAYS
+    is_holiday = today in timezone_handler.US_HOLIDAYS
     
     if is_weekend or is_holiday:
         # Find the most recent trading day
@@ -119,6 +111,7 @@ def get_market_times():
 @lru_cache(maxsize=128)
 def fetch_market_data(label, symbol, period):
     """Fetch market data with robust error handling and consistent timezone handling"""
+    logger.info(f"Fetching market data for {label} ({symbol}) with period {period}")
     try:
         is_crypto = any(x in symbol for x in ["-USD", "-EUR"])
         is_european = any(x in symbol for x in ["^STOXX", ".PA", ".AS", ".DE", ".L", "BNP", "AMS:", "LON:", "FRA:", "EPA:"])
@@ -140,10 +133,14 @@ def fetch_market_data(label, symbol, period):
                         # Get data for the last 3 days to ensure we have enough data
                         hist = ticker.history(period="3d")
                         
-                        # Filter to just today's data if available
-                        today = datetime.datetime.now().date()
+                        # Filter to just today's data if available, using proper timezone
+                        user_tz = timezone_handler.get_user_timezone()
+                        today = timezone_handler.now().date()
+                        
                         if not hist.empty and isinstance(hist.index[0], pd.Timestamp):
-                            hist = hist[hist.index.date == today]
+                            # Convert index dates to user timezone before comparing
+                            hist_dates = pd.Series([ts.astimezone(user_tz).date() for ts in hist.index])
+                            hist = hist[hist_dates == today]
                             
                         # If still empty, use all data
                         if hist.empty:
@@ -154,9 +151,19 @@ def fetch_market_data(label, symbol, period):
                 else:
                     # Other European markets
                     try:
-                        # Convert NY market times to European time (6 hours ahead)
-                        euro_open = market_open - datetime.timedelta(hours=6)
-                        euro_close = market_close - datetime.timedelta(hours=6)
+                        # Convert NY market times to European time using proper timezone conversion
+                        ny_tz = timezone_handler.get_market_timezone("US")
+                        eu_tz = timezone_handler.get_market_timezone("Europe")
+                        
+                        # Ensure market_open and market_close have timezone info
+                        if market_open.tzinfo is None:
+                            market_open = market_open.replace(tzinfo=ny_tz)
+                        if market_close.tzinfo is None:
+                            market_close = market_close.replace(tzinfo=ny_tz)
+                            
+                        # Convert to European timezone
+                        euro_open = market_open.astimezone(eu_tz)
+                        euro_close = market_close.astimezone(eu_tz)
                         
                         hist = ticker.history(
                             start=euro_open,
@@ -190,10 +197,11 @@ def fetch_market_data(label, symbol, period):
         # Create a copy to avoid SettingWithCopyWarning
         hist = hist.copy()
         
-        # IMPORTANT: Remove timezone info from all datetime indices for consistent merging
+        # IMPORTANT: Standardize timezone info for all datetime indices for consistent merging
         if not hist.empty and hist.index.tz is not None:
-            # Convert to timezone-naive datetime objects without using .dt accessor
-            hist.index = pd.DatetimeIndex([d.replace(tzinfo=None) for d in hist.index])
+            # Convert all timestamps to the user's timezone for consistent display
+            user_tz = timezone_handler.get_user_timezone()
+            hist.index = pd.DatetimeIndex([d.astimezone(user_tz) for d in hist.index])
             
         # Ensure we have the required columns
         if 'Close' not in hist.columns:
@@ -205,8 +213,12 @@ def fetch_market_data(label, symbol, period):
             'Datetime': 'Date'
         })
         
-        # Calculate normalized performance
+        # Calculate normalized performance with improved type handling
         try:
+            # Ensure Close column is numeric
+            if 'Close' in hist.columns:
+                hist['Close'] = pd.to_numeric(hist['Close'], errors='coerce')
+                
             base_price = float(hist['Close'].iloc[0])
             if base_price <= 0:
                 return None
@@ -215,7 +227,8 @@ def fetch_market_data(label, symbol, period):
             
             # Calculate percentage change
             pct_change = (float(hist['Close'].iloc[-1]) / float(hist['Close'].iloc[0]) - 1) * 100
-        except (IndexError, ZeroDivisionError, TypeError, ValueError):
+        except (IndexError, ZeroDivisionError, TypeError, ValueError) as e:
+            st.warning(f"Error calculating performance for {label}: {str(e)}")
             return None
         
         return {
@@ -224,7 +237,9 @@ def fetch_market_data(label, symbol, period):
             "label": label
         }
     except Exception as e:
-        st.warning(f"Data error for {label}: {str(e)}")
+        error_msg = f"Data error for {label}: {str(e)}"
+        logger.error(error_msg)
+        st.warning(error_msg)
         return None
 
 def clean_portfolio(df):
@@ -237,14 +252,15 @@ def clean_portfolio(df):
 
 def is_money_market(ticker):
     """Check if ticker is a money market fund"""
-    return ticker in MONEY_MARKET_TICKERS or "XX" in ticker
+    classification = asset_classifier.classify(ticker)
+    return classification["asset_class"] == "Money Market" or ticker in MONEY_MARKET_TICKERS or "XX" in ticker
 
 # ==============================================
 # UI Components
 # ==============================================
 def render_header():
     st.title("📊 Portfolio Tracker")
-    st.caption("Version 5.0 | Created by Rohan Potthoff")
+    st.caption("Version 6.0 | Created by Rohan Potthoff")
     st.markdown("""
     <style>
     .social-icons { display: flex; gap: 15px; margin-top: -10px; margin-bottom: 10px; }
@@ -261,37 +277,78 @@ def render_header():
 def render_sidebar():
     with st.sidebar.expander("📦 Version History", expanded=False):
         st.markdown("""
+        - **v6.0**: Enhanced asset classification, global timezone support, improved visualizations
         - **v5.0**: Fixed performance calculation, removed 10Y Treasury, improved ETF handling
         - **v4.9**: Fixed 5-minute interval data processing and OTC stock handling
         - **v4.8**: Fixed DatetimeIndex.dt attribute error for multiple stocks
-        - **v4.7**: Fixed portfolio valuation, weekend handling, and European stocks
         """)
     
     with st.sidebar.expander("🔧 Filters & Settings", expanded=True):
+        # Performance period selection
         selected_period = st.selectbox(
             "Performance Period",
             list(PERIOD_MAP.keys()),
             index=0
         )
-        # Removed truncated tooltip
-    return selected_period
+        
+        # Visualization options
+        st.subheader("Visualization Options")
+        show_absolute = st.checkbox("Show absolute values", value=False,
+                                   help="Display portfolio value alongside percentage returns")
+        
+        # Timezone selection
+        st.subheader("Timezone Settings")
+        current_tz = timezone_handler.get_user_timezone().zone
+        available_timezones = [
+            "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+            "Europe/London", "Europe/Paris", "Europe/Berlin", "Asia/Tokyo",
+            "Asia/Shanghai", "Asia/Singapore", "Australia/Sydney"
+        ]
+        
+        if current_tz not in available_timezones:
+            available_timezones.append(current_tz)
+            available_timezones.sort()
+            
+        selected_timezone = st.selectbox(
+            "Display Timezone",
+            available_timezones,
+            index=available_timezones.index(current_tz),
+            help="Select timezone for displaying dates and times"
+        )
+        
+        # Update timezone if changed
+        if selected_timezone != current_tz:
+            st.session_state['user_timezone'] = selected_timezone
+            st.experimental_rerun()
+        
+        # Display market status
+        st.info(timezone_handler.get_market_status_display())
+        
+    return selected_period, show_absolute
 
 # ==============================================
 # Main Processing
 # ==============================================
 def main():
     render_header()
-    selected_period = render_sidebar()
+    selected_period, show_absolute = render_sidebar()
     period = PERIOD_MAP[selected_period]
 
-    # Fetch benchmark data
+    # Fetch benchmark data with improved error handling
     benchmark_series = []
     benchmark_values = {}
-    for label, symbol in COMPARISON_TICKERS.items():
-        result = fetch_market_data(label, symbol, period)
-        if result:
-            benchmark_series.append(result)
-            benchmark_values[label] = result["pct_change"]
+    
+    with st.spinner("Fetching market data..."):
+        for label, symbol in COMPARISON_TICKERS.items():
+            try:
+                result = fetch_market_data(label, symbol, period)
+                if result:
+                    benchmark_series.append(result)
+                    benchmark_values[label] = result["pct_change"]
+                else:
+                    st.warning(f"Could not fetch data for {label}")
+            except Exception as e:
+                st.warning(f"Error fetching {label} data: {str(e)}")
 
     # File upload handling
     uploaded_files = st.file_uploader(
@@ -383,19 +440,26 @@ def main():
                         st.warning(f"Empty data for {ticker}. Using last known price.")
                         continue
                     
-                    # Safely extract prices with proper type checking
+                    # Safely extract prices with improved type checking
                     try:
                         # For historical data, we need both start and current price
                         if 'Close' in hist.columns and len(hist) >= 2:
+                            # Ensure Close column is numeric
+                            if not pd.api.types.is_numeric_dtype(hist['Close']):
+                                hist['Close'] = pd.to_numeric(hist['Close'], errors='coerce')
+                                
                             start_price = float(hist['Close'].iloc[0])
                             current_price = float(hist['Close'].iloc[-1])
                         else:
                             # Fallback to current price only
                             ticker_info = yf.Ticker(ticker).info
                             current_price = ticker_info.get('regularMarketPrice', 0)
+                            # Handle non-numeric values
+                            if not isinstance(current_price, (int, float)):
+                                current_price = pd.to_numeric(current_price, errors='coerce')
                             start_price = current_price
                             
-                        if start_price <= 0 or current_price <= 0:
+                        if pd.isna(start_price) or pd.isna(current_price) or start_price <= 0 or current_price <= 0:
                             raise ValueError("Invalid price data")
                     except Exception as e:
                         st.warning(f"Price data error for {ticker}: {str(e)}. Using default values.")
@@ -409,6 +473,10 @@ def main():
                     # Store performance data with proper error handling
                     try:
                         if 'Date' in hist.columns and 'Normalized' in hist.columns:
+                            # Ensure Normalized column is numeric
+                            if not pd.api.types.is_numeric_dtype(hist['Normalized']):
+                                hist['Normalized'] = pd.to_numeric(hist['Normalized'], errors='coerce')
+                                
                             hist_copy = hist[["Date", "Normalized"]].copy()
                             
                             # Ensure Date is a proper datetime - handle both Series and DatetimeIndex
@@ -416,29 +484,39 @@ def main():
                                 # Convert DatetimeIndex to regular datetime Series
                                 hist_copy["Date"] = pd.Series(hist_copy["Date"].to_pydatetime())
                             else:
-                                # For regular Series, use pd.to_datetime
-                                hist_copy["Date"] = pd.to_datetime(hist_copy["Date"])
+                                # For regular Series, use pd.to_datetime with error handling
+                                hist_copy["Date"] = pd.to_datetime(hist_copy["Date"], errors='coerce')
+                                
+                            # Drop any rows with NaT dates
+                            hist_copy = hist_copy.dropna(subset=["Date"])
                             
-                            # Remove timezone info if present
+                            # Standardize timezone info to user timezone
+                            user_tz = timezone_handler.get_user_timezone()
                             hist_copy["Date"] = hist_copy["Date"].apply(
-                                lambda x: x.replace(tzinfo=None) if hasattr(x, 'tzinfo') else x
+                                lambda x: x.astimezone(user_tz) if hasattr(x, 'tzinfo') and x.tzinfo is not None else
+                                          x.replace(tzinfo=user_tz) if hasattr(x, 'tzinfo') else x
                             )
                             
                             if not portfolio_history.empty:
                                 # Create a copy to avoid modifying original data
                                 portfolio_copy = portfolio_history.copy()
                                 
-                                # Ensure both Date columns are timezone-naive datetime objects
+                                # Ensure both Date columns are proper datetime objects
                                 if isinstance(portfolio_copy["Date"], pd.DatetimeIndex):
                                     # Convert DatetimeIndex to regular datetime Series
                                     portfolio_copy["Date"] = pd.Series(portfolio_copy["Date"].to_pydatetime())
                                 else:
-                                    # For regular Series, use pd.to_datetime
-                                    portfolio_copy["Date"] = pd.to_datetime(portfolio_copy["Date"])
+                                    # For regular Series, use pd.to_datetime with error handling
+                                    portfolio_copy["Date"] = pd.to_datetime(portfolio_copy["Date"], errors='coerce')
+                                    
+                                # Drop any rows with NaT dates
+                                portfolio_copy = portfolio_copy.dropna(subset=["Date"])
                                 
-                                # Remove timezone info if present
+                                # Standardize timezone info to user timezone
+                                user_tz = timezone_handler.get_user_timezone()
                                 portfolio_copy["Date"] = portfolio_copy["Date"].apply(
-                                    lambda x: x.replace(tzinfo=None) if hasattr(x, 'tzinfo') else x
+                                    lambda x: x.astimezone(user_tz) if hasattr(x, 'tzinfo') and x.tzinfo is not None else
+                                              x.replace(tzinfo=user_tz) if hasattr(x, 'tzinfo') else x
                                 )
                                 
                                 # Rename the Normalized column to the ticker symbol
@@ -461,8 +539,22 @@ def main():
                                     # Try an alternative approach
                                     try:
                                         # Convert dates to strings for more reliable merging
-                                        portfolio_copy["Date_str"] = portfolio_copy["Date"].dt.strftime("%Y-%m-%d %H:%M:%S")
-                                        hist_copy["Date_str"] = hist_copy["Date"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                                        # Handle both Series and DatetimeIndex types safely
+                                        try:
+                                            if hasattr(portfolio_copy["Date"], "dt"):
+                                                portfolio_copy["Date_str"] = portfolio_copy["Date"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                                            else:
+                                                portfolio_copy["Date_str"] = portfolio_copy["Date"].apply(lambda x: x.strftime("%Y-%m-%d %H:%M:%S"))
+                                                
+                                            if hasattr(hist_copy["Date"], "dt"):
+                                                hist_copy["Date_str"] = hist_copy["Date"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                                            else:
+                                                hist_copy["Date_str"] = hist_copy["Date"].apply(lambda x: x.strftime("%Y-%m-%d %H:%M:%S"))
+                                        except Exception as e:
+                                            st.warning(f"Date conversion error: {str(e)}. Using alternative approach.")
+                                            # Fallback to simpler approach
+                                            portfolio_copy["Date_str"] = [d.strftime("%Y-%m-%d %H:%M:%S") for d in portfolio_copy["Date"]]
+                                            hist_copy["Date_str"] = [d.strftime("%Y-%m-%d %H:%M:%S") for d in hist_copy["Date"]]
                                         
                                         # Merge on string dates
                                         combined = pd.merge(
@@ -542,138 +634,85 @@ def main():
                 with cols[i+1]:
                     st.metric(label, "", f"{value:.2f}%")
 
-            # Performance Visualization
+            # Performance Visualization with enhanced charts
             if not portfolio_history.empty:
                 st.subheader("📊 Performance Comparison")
+                
                 # Handle portfolio normalization with proper error handling
                 try:
-                    if not portfolio_history.empty:
-                        # Clean up the portfolio history data
-                        portfolio_history = portfolio_history.copy()
-                        
-                        # Ensure Date column is properly formatted - handle both Series and DatetimeIndex
-                        if isinstance(portfolio_history["Date"], pd.DatetimeIndex):
-                            # Already a DatetimeIndex, convert to Series
-                            date_series = pd.Series(portfolio_history["Date"].to_pydatetime())
-                            # Create a new DataFrame with the converted Date
-                            portfolio_history = portfolio_history.reset_index(drop=True)
-                            portfolio_history["Date"] = date_series
-                        else:
-                            # For regular Series, use pd.to_datetime
-                            portfolio_history["Date"] = pd.to_datetime(portfolio_history["Date"])
-                        
-                        # Remove timezone info if present
-                        portfolio_history["Date"] = portfolio_history["Date"].apply(
-                            lambda x: x.replace(tzinfo=None) if hasattr(x, 'tzinfo') else x
-                        )
-                        
-                        # Drop any rows with NaN Date values
-                        portfolio_history = portfolio_history.dropna(subset=['Date'])
-                        
-                        # Get numeric columns (excluding Date)
-                        numeric_cols = [col for col in portfolio_history.columns if col != 'Date']
-                        
-                        # Fill NaN values with forward fill then backward fill
-                        for col in numeric_cols:
-                            portfolio_history[col] = portfolio_history[col].ffill().bfill()
-                        
-                        # Set index and calculate mean, handling NaN values properly
-                        portfolio_history_indexed = portfolio_history.set_index('Date')
+                    # Clean up the portfolio history data
+                    portfolio_history = portfolio_history.copy()
+                    
+                    # Ensure Date column is properly formatted
+                    portfolio_history["Date"] = pd.to_datetime(portfolio_history["Date"])
+                    
+                    # Drop any rows with NaN Date values
+                    portfolio_history = portfolio_history.dropna(subset=['Date'])
+                    
+                    # Get numeric columns (excluding Date)
+                    numeric_cols = [col for col in portfolio_history.columns if col != 'Date']
+                    
+                    # Fill NaN values with forward fill then backward fill
+                    for col in numeric_cols:
+                        portfolio_history[col] = portfolio_history[col].ffill().bfill()
+                    
+                    # Set index and calculate mean, handling NaN values properly
+                    portfolio_history_indexed = portfolio_history.set_index('Date')
+                    
+                    # Add validation to prevent division by zero
+                    if not portfolio_history_indexed.empty and len(numeric_cols) > 0:
+                        # Calculate mean performance
                         portfolio_mean = portfolio_history_indexed[numeric_cols].mean(axis=1, skipna=True)
                         
-                        # Create a new dataframe with the results
-                        portfolio_norm = pd.DataFrame({
-                            'Date': portfolio_mean.index,
-                            'Normalized': portfolio_mean.values
-                        })
+                        # Add absolute portfolio value if available
+                        if show_absolute:
+                            # Calculate absolute values based on portfolio weights
+                            portfolio_history_indexed["Value"] = portfolio_end_value
                         
-                        portfolio_norm["Index"] = "My Portfolio"
+                        # Create enhanced visualization
+                        fig = visualization_helper.create_performance_chart(
+                            portfolio_mean,
+                            benchmark_series,
+                            period,
+                            show_absolute=show_absolute
+                        )
+                        
+                        # Render the chart
+                        visualization_helper.render_chart(fig)
                     else:
-                        st.warning("No portfolio history data available for charting.")
-                        portfolio_norm = pd.DataFrame(columns=["Date", "Normalized", "Index"])
+                        st.warning("Insufficient data for performance visualization")
                 except Exception as e:
                     st.error(f"Error calculating portfolio performance: {str(e)}")
                     st.error(f"Details: {str(e)}")
-                    st.info(f"Debug info - Date type: {type(portfolio_history['Date']).__name__ if not portfolio_history.empty else 'empty'}")
-                    portfolio_norm = pd.DataFrame(columns=["Date", "Normalized", "Index"])
-
-                # Process benchmark data
-                bench_dfs = []
-                for b in benchmark_series:
-                    try:
-                        bench_df = pd.DataFrame(b["data"])
-                        
-                        # Ensure Date is properly formatted - handle both Series and DatetimeIndex
-                        if isinstance(bench_df["Date"], pd.DatetimeIndex):
-                            # Convert DatetimeIndex to regular datetime Series
-                            bench_df["Date"] = pd.Series(bench_df["Date"].to_pydatetime())
-                        else:
-                            # For regular Series, use pd.to_datetime
-                            bench_df["Date"] = pd.to_datetime(bench_df["Date"])
-                        
-                        # Remove timezone info if present
-                        bench_df["Date"] = bench_df["Date"].apply(
-                            lambda x: x.replace(tzinfo=None) if hasattr(x, 'tzinfo') else x
-                        )
-                        
-                        bench_df["Index"] = b["label"]
-                        bench_dfs.append(bench_df)
-                    except Exception as e:
-                        st.warning(f"Error processing benchmark {b['label']}: {str(e)}")
                 
-                # Combine portfolio and benchmark data
-                try:
-                    # Make sure portfolio_norm Date is not a DatetimeIndex
-                    if isinstance(portfolio_norm["Date"], pd.DatetimeIndex):
-                        portfolio_norm = portfolio_norm.reset_index(drop=True)
-                        portfolio_norm["Date"] = pd.Series(portfolio_norm["Date"].to_pydatetime())
-                    
-                    # Use a safer approach to combine data
-                    all_dfs = [portfolio_norm] + bench_dfs
-                    combined = pd.concat(all_dfs, ignore_index=True)
-                    
-                    # Sort by Date for proper visualization
-                    combined = combined.sort_values("Date")
-                except Exception as e:
-                    st.error(f"Error combining performance data: {str(e)}")
-                    st.error(f"Details: {str(e)}")
-                    combined = pd.DataFrame(columns=["Date", "Normalized", "Index"])
-
-                fig = px.line(
-                    combined,
-                    x="Date",
-                    y="Normalized",
-                    color="Index",
-                    height=500,
-                    template="plotly_white"
-                ).update_layout(
-                    xaxis_title="Market Hours" if period == "1d" else "Date",
-                    hovermode="x unified",
-                    legend=dict(
-                        orientation="h",
-                        yanchor="bottom",
-                        y=1.02,
-                        xanchor="right",
-                        x=1
-                    ),
-                    yaxis_title="Normalized Performance (%)"
+                # Asset Allocation Analysis
+                st.subheader("📊 Asset Allocation Analysis")
+                
+                # Add asset class information to the dataframe
+                df["Asset Class"] = df["Ticker"].apply(
+                      lambda x: asset_classifier.classify(x)["asset_class"]
                 )
                 
-                # Format x-axis based on period and ensure proper timezone display
-                if period == "1d":
-                    # For intraday, show hours and minutes
-                    fig.update_xaxes(
-                        tickformat="%H:%M",
-                        title=f"Market Hours ({MARKET_TIMEZONE.zone})"
-                    )
-                elif period in ["1wk", "1mo", "3mo"]:
-                    # For shorter periods, show month and day
-                    fig.update_xaxes(tickformat="%b %d")
-                else:
-                    # For longer periods, show month and year
-                    fig.update_xaxes(tickformat="%b %Y")
+                # Create asset allocation charts
+                col1, col2 = st.columns(2)
                 
-                st.plotly_chart(fig, use_container_width=True)
+                with col1:
+                    # Asset Class Allocation
+                    asset_class_fig = visualization_helper.create_allocation_chart(
+                        df,
+                        "Asset Class",
+                        "Asset Class Allocation"
+                    )
+                    visualization_helper.render_chart(asset_class_fig)
+                    
+                with col2:
+                    # Sector Allocation
+                    sector_fig = visualization_helper.create_allocation_chart(
+                        df,
+                        "Sector",
+                        "Sector Allocation"
+                    )
+                    visualization_helper.render_chart(sector_fig)
 
             # Portfolio Insights
             st.subheader("🧠 Portfolio Insights")
