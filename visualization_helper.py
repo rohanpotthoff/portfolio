@@ -74,28 +74,106 @@ class VisualizationHelper:
         """
         if height is None:
             height = self.default_height
-            
-        # Prepare portfolio data
-        if portfolio_data.empty:
+
+        # Handle empty data case with improved validation
+        if portfolio_data is None or (hasattr(portfolio_data, 'empty') and portfolio_data.empty):
             return self._create_empty_chart("No portfolio data available")
-        
-        # Ensure portfolio_data is valid and contains numeric values
-        if not isinstance(portfolio_data, pd.Series) and not isinstance(portfolio_data, pd.DataFrame):
-            return self._create_empty_chart("Invalid portfolio data format")
             
-        # Convert to DataFrame if it's a Series
+        # Validate portfolio_data type
+        if not isinstance(portfolio_data, (pd.DataFrame, pd.Series)):
+            try:
+                # Try to convert to Series if it's not already a DataFrame or Series
+                portfolio_data = pd.Series(portfolio_data)
+            except Exception as e:
+                return self._create_empty_chart(f"Invalid portfolio data format: {str(e)}")
+
+        # Generate business day date range covering all data sources with robust error handling
+        def get_business_date_range(data_sources):
+            all_dates = []
+            for source in data_sources:
+                try:
+                    if source is None:
+                        continue
+                        
+                    if hasattr(source, 'index') and not source.empty:
+                        # Convert index to datetime if it's not already
+                        if not isinstance(source.index, pd.DatetimeIndex):
+                            try:
+                                dates = pd.to_datetime(source.index, errors='coerce')
+                                # Filter out NaT values
+                                dates = dates[~pd.isna(dates)]
+                                all_dates.extend(dates)
+                            except Exception:
+                                pass
+                        else:
+                            all_dates.extend(source.index)
+                            
+                    if isinstance(source, pd.DataFrame) and 'Date' in source.columns:
+                        try:
+                            dates = pd.to_datetime(source['Date'], errors='coerce')
+                            # Filter out NaT values
+                            dates = dates[~pd.isna(dates)]
+                            all_dates.extend(dates)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    st.warning(f"Error processing date range for a data source: {str(e)}")
+                    
+            if not all_dates:
+                # If no valid dates found, return empty DatetimeIndex
+                return pd.DatetimeIndex([])
+                
+            try:
+                # Create business day range
+                return pd.bdate_range(
+                    start=min(all_dates),
+                    end=max(all_dates),
+                    freq='B'  # Business days only
+                )
+            except Exception as e:
+                st.warning(f"Error creating date range: {str(e)}")
+                # Return the original dates as DatetimeIndex if business day range fails
+                return pd.DatetimeIndex(all_dates)
+
+        # Get combined date index from portfolio and benchmarks with validation
+        try:
+            benchmark_dfs = []
+            for b in benchmark_data:
+                if b and isinstance(b, dict) and "data" in b:
+                    try:
+                        df = pd.DataFrame(b["data"])
+                        if not df.empty:
+                            benchmark_dfs.append(df)
+                    except Exception:
+                        pass
+                        
+            date_index = get_business_date_range([portfolio_data] + benchmark_dfs)
+            
+            # If date_index is empty, create a simple date range
+            if len(date_index) == 0:
+                st.warning("Could not determine date range from data. Using default range.")
+                end_date = pd.Timestamp.now()
+                start_date = end_date - pd.Timedelta(days=30)  # Default to 30 days
+                date_index = pd.date_range(start=start_date, end=end_date, freq='D')
+        except Exception as e:
+            st.error(f"Error creating date index: {str(e)}")
+            # Create a simple date range as fallback
+            end_date = pd.Timestamp.now()
+            start_date = end_date - pd.Timedelta(days=30)  # Default to 30 days
+            date_index = pd.date_range(start=start_date, end=end_date, freq='D')
+
+        # Process portfolio data with business day alignment
         if isinstance(portfolio_data, pd.Series):
             portfolio_norm = pd.DataFrame({
-                'Date': portfolio_data.index,
-                'Normalized': portfolio_data.values,
-                'Index': "My Portfolio"
+                'Normalized': portfolio_data.reindex(date_index, method='ffill').values,
+                'Index': "My Portfolio",
+                'Date': date_index
             })
         else:
-            # If it's already a DataFrame, ensure it has the right format
             portfolio_norm = pd.DataFrame({
-                'Date': portfolio_data.index,
-                'Normalized': portfolio_data.iloc[:, 0].values if not portfolio_data.empty else [],
-                'Index': "My Portfolio"
+                'Normalized': portfolio_data.iloc[:, 0].reindex(date_index, method='ffill').values,
+                'Index': "My Portfolio",
+                'Date': date_index
             })
         
         # Prepare benchmark data

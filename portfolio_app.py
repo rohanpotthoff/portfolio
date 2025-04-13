@@ -851,14 +851,30 @@ def main():
                     st.error(f"Critical error processing {ticker}: {str(e)}")
                     continue
 
-            # Create portfolio performance data
-            portfolio_pct = ((portfolio_end_value / portfolio_start_value - 1) * 100
-                           if portfolio_start_value > 0 else 0.0)
-            
-            # Ensure portfolio_pct is a valid number
-            if pd.isna(portfolio_pct) or not np.isfinite(portfolio_pct):
+            # Create portfolio performance data with improved error handling
+            try:
+                # Ensure both values are valid numbers
+                if not isinstance(portfolio_end_value, (int, float)) or not isinstance(portfolio_start_value, (int, float)):
+                    portfolio_end_value = float(portfolio_end_value) if portfolio_end_value else 0.0
+                    portfolio_start_value = float(portfolio_start_value) if portfolio_start_value else 0.0
+                
+                # Calculate percentage change with validation
+                if portfolio_start_value > 0:
+                    portfolio_pct = ((portfolio_end_value / portfolio_start_value) - 1) * 100
+                else:
+                    portfolio_pct = 0.0
+                    st.warning("Starting portfolio value is zero. Cannot calculate percentage change.")
+                
+                # Ensure portfolio_pct is a valid number
+                if pd.isna(portfolio_pct) or not np.isfinite(portfolio_pct):
+                    portfolio_pct = 0.0
+                    st.warning("Could not calculate portfolio percentage change. Using 0% as default.")
+                    
+                # Log the values for debugging
+                logger.info(f"Portfolio start value: {portfolio_start_value}, end value: {portfolio_end_value}, pct change: {portfolio_pct}")
+            except Exception as e:
                 portfolio_pct = 0.0
-                st.warning("Could not calculate portfolio percentage change. Using 0% as default.")
+                st.warning(f"Error calculating portfolio percentage change: {str(e)}. Using 0% as default.")
             
             # Performance Metrics
             st.subheader("📈 Performance Metrics")
@@ -987,13 +1003,29 @@ def main():
                             except Exception as e:
                                 st.warning(f"Error adding absolute value: {str(e)}")
                         
-                        # Create enhanced visualization
-                        fig = visualization_helper.create_performance_chart(
-                            portfolio_mean,
-                            benchmark_series,
-                            period,
-                            show_absolute=show_absolute
-                        )
+                        # Create enhanced visualization with improved error handling
+                        try:
+                            # Validate portfolio_mean data
+                            if portfolio_mean.empty:
+                                st.warning("Portfolio performance data is empty. Cannot create chart.")
+                                fig = visualization_helper._create_empty_chart("No portfolio performance data available")
+                            elif portfolio_mean.isna().all():
+                                st.warning("Portfolio performance data contains only NaN values. Cannot create chart.")
+                                fig = visualization_helper._create_empty_chart("Portfolio data contains only NaN values")
+                            else:
+                                # Check if benchmark_series is valid
+                                valid_benchmarks = [b for b in benchmark_series if b is not None]
+                                
+                                # Create the chart
+                                fig = visualization_helper.create_performance_chart(
+                                    portfolio_mean,
+                                    valid_benchmarks,
+                                    period,
+                                    show_absolute=show_absolute
+                                )
+                        except Exception as e:
+                            st.error(f"Error creating performance chart: {str(e)}")
+                            fig = visualization_helper._create_empty_chart(f"Error creating chart: {str(e)}")
                         
                         # Render the chart with a unique key
                         visualization_helper.render_chart(fig, key="performance_chart")
