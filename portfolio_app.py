@@ -342,13 +342,23 @@ def main():
         for label, symbol in COMPARISON_TICKERS.items():
             try:
                 result = fetch_market_data(label, symbol, period)
-                if result:
+                if result and "pct_change" in result:
+                    # Ensure pct_change is a valid number
+                    pct_change = result["pct_change"]
+                    if pd.isna(pct_change) or not np.isfinite(pct_change):
+                        pct_change = 0.0
+                        st.warning(f"Invalid percentage change for {label}. Using 0% as default.")
+                    
                     benchmark_series.append(result)
-                    benchmark_values[label] = result["pct_change"]
+                    benchmark_values[label] = pct_change
                 else:
                     st.warning(f"Could not fetch data for {label}")
+                    # Add a default value to ensure the benchmark appears in the UI
+                    benchmark_values[label] = 0.0
             except Exception as e:
                 st.warning(f"Error fetching {label} data: {str(e)}")
+                # Add a default value to ensure the benchmark appears in the UI
+                benchmark_values[label] = 0.0
 
     # File upload handling
     uploaded_files = st.file_uploader(
@@ -614,8 +624,13 @@ def main():
                     continue
 
             # Create portfolio performance data
-            portfolio_pct = ((portfolio_end_value / portfolio_start_value - 1) * 100 
-                           if portfolio_start_value > 0 else 0)
+            portfolio_pct = ((portfolio_end_value / portfolio_start_value - 1) * 100
+                           if portfolio_start_value > 0 else 0.0)
+            
+            # Ensure portfolio_pct is a valid number
+            if pd.isna(portfolio_pct) or not np.isfinite(portfolio_pct):
+                portfolio_pct = 0.0
+                st.warning("Could not calculate portfolio percentage change. Using 0% as default.")
             
             # Performance Metrics
             st.subheader("📈 Performance Metrics")
@@ -632,7 +647,12 @@ def main():
 
             for i, (label, value) in enumerate(benchmark_values.items()):
                 with cols[i+1]:
-                    st.metric(label, "", f"{value:.2f}%")
+                    # Ensure value is a valid number
+                    if pd.isna(value) or not np.isfinite(value):
+                        value = 0.0
+                    
+                    delta_color = "normal" if value >= 0 else "inverse"
+                    st.metric(label, "", f"{value:.2f}%", delta_color=delta_color)
 
             # Performance Visualization with enhanced charts
             if not portfolio_history.empty:
@@ -663,6 +683,14 @@ def main():
                     if not portfolio_history_indexed.empty and len(numeric_cols) > 0:
                         # Calculate mean performance
                         portfolio_mean = portfolio_history_indexed[numeric_cols].mean(axis=1, skipna=True)
+                        
+                        # Ensure portfolio_mean is not empty and contains valid data
+                        if portfolio_mean.empty or portfolio_mean.isna().all():
+                            st.warning("Portfolio performance data is empty or contains only NaN values.")
+                            # Create a simple DataFrame with the portfolio percentage change
+                            current_time = timezone_handler.now()
+                            portfolio_mean = pd.Series([0.0, portfolio_pct],
+                                                      index=[current_time - datetime.timedelta(hours=1), current_time])
                         
                         # Add absolute portfolio value if available
                         if show_absolute:

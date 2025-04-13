@@ -78,12 +78,25 @@ class VisualizationHelper:
         # Prepare portfolio data
         if portfolio_data.empty:
             return self._create_empty_chart("No portfolio data available")
+        
+        # Ensure portfolio_data is valid and contains numeric values
+        if not isinstance(portfolio_data, pd.Series) and not isinstance(portfolio_data, pd.DataFrame):
+            return self._create_empty_chart("Invalid portfolio data format")
             
-        portfolio_norm = pd.DataFrame({
-            'Date': portfolio_data.index,
-            'Normalized': portfolio_data.values,
-            'Index': "My Portfolio"
-        })
+        # Convert to DataFrame if it's a Series
+        if isinstance(portfolio_data, pd.Series):
+            portfolio_norm = pd.DataFrame({
+                'Date': portfolio_data.index,
+                'Normalized': portfolio_data.values,
+                'Index': "My Portfolio"
+            })
+        else:
+            # If it's already a DataFrame, ensure it has the right format
+            portfolio_norm = pd.DataFrame({
+                'Date': portfolio_data.index,
+                'Normalized': portfolio_data.iloc[:, 0].values if not portfolio_data.empty else [],
+                'Index': "My Portfolio"
+            })
         
         # Prepare benchmark data
         bench_dfs = []
@@ -94,8 +107,25 @@ class VisualizationHelper:
                 bench_dfs.append(bench_df)
         
         # Combine data
-        combined = pd.concat([portfolio_norm] + bench_dfs, ignore_index=True)
+        if bench_dfs:
+            combined = pd.concat([portfolio_norm] + bench_dfs, ignore_index=True)
+        else:
+            combined = portfolio_norm
+            
+        # Ensure Date column contains datetime objects
+        combined['Date'] = pd.to_datetime(combined['Date'], errors='coerce')
+        
+        # Drop rows with NaT dates
+        combined = combined.dropna(subset=['Date'])
+        
+        # Sort by date
         combined = combined.sort_values("Date")
+        
+        # Ensure Normalized column contains numeric values
+        combined['Normalized'] = pd.to_numeric(combined['Normalized'], errors='coerce')
+        
+        # Fill NaN values in Normalized column
+        combined['Normalized'] = combined['Normalized'].fillna(0)
         
         if show_absolute:
             # Create a figure with secondary y-axis
@@ -458,6 +488,10 @@ class VisualizationHelper:
         cols = st.columns(columns)
         
         with cols[0]:
+            # Ensure portfolio_change is a valid number
+            if pd.isna(portfolio_change) or not np.isfinite(portfolio_change):
+                portfolio_change = 0.0
+                
             delta_color = "normal" if portfolio_change >= 0 else "inverse"
             st.metric(
                 "My Portfolio",
@@ -468,6 +502,10 @@ class VisualizationHelper:
         
         for i, (label, value) in enumerate(benchmark_values.items()):
             with cols[i+1]:
+                # Ensure value is a valid number
+                if pd.isna(value) or not np.isfinite(value):
+                    value = 0.0
+                    
                 delta_color = "normal" if value >= 0 else "inverse"
                 st.metric(
                     label,
