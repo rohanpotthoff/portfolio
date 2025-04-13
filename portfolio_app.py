@@ -68,7 +68,7 @@ def get_market_times():
         days_back = 1
         check_date = today - datetime.timedelta(days=days_back)
         
-        while check_date.weekday() >= 5 or check_date in US_HOLIDAYS:
+        while check_date.weekday() >= 5 or check_date in timezone_handler.US_HOLIDAYS:
             days_back += 1
             check_date = today - datetime.timedelta(days=days_back)
         
@@ -90,7 +90,7 @@ def get_market_times():
         days_forward = 1
         check_date = today + datetime.timedelta(days=days_forward)
         
-        while check_date.weekday() >= 5 or check_date in US_HOLIDAYS:
+        while check_date.weekday() >= 5 or check_date in timezone_handler.US_HOLIDAYS:
             days_forward += 1
             check_date = today + datetime.timedelta(days=days_forward)
         
@@ -319,7 +319,7 @@ def render_sidebar():
         # Update timezone if changed
         if selected_timezone != current_tz:
             st.session_state['user_timezone'] = selected_timezone
-            st.experimental_rerun()
+            st.rerun()
         
         # Display market status
         st.info(timezone_handler.get_market_status_display())
